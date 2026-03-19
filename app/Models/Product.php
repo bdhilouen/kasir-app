@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Product extends Model
 {
-    protected $fillabale = [
+    protected $fillable = [
         'name',
         'sku',
         'price',
@@ -15,7 +15,7 @@ class Product extends Model
         'description'
     ];
 
-    public function transanctionDetais() {
+    public function transactionDetails() {
         return $this->hasMany(TransactionDetail::class);
     }
 }
