@@ -33,8 +33,8 @@ class ProductController extends Controller
         }
 
         // Sorting
-        $sortBy    = $request->get('sort_by', 'name');
-        $sortOrder = $request->get('sort_order', 'asc');
+        $sortBy    = $request->input('sort_by', 'name');
+        $sortOrder = $request->input('sort_order', 'asc');
         $allowedSorts = ['name', 'price', 'stock', 'created_at'];
 
         if (in_array($sortBy, $allowedSorts)) {
@@ -42,7 +42,7 @@ class ProductController extends Controller
         }
 
         // Pagination (default 15 per page)
-        $products = $query->paginate($request->get('per_page', 15));
+        $products = $query->paginate($request->input('per_page', 15));
 
         return response()->json([
             'success' => true,
