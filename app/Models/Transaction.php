@@ -21,7 +21,7 @@ class Transaction extends Model
         'transaction_date' => 'datetime'
     ];
 
-    public function details() {
+    public function transactionDetails() {
         return $this->hasMany(TransactionDetail::class);
     }
 
