@@ -20,17 +20,25 @@ class ReportController extends Controller
     {
         $date = $request->input('date', now()->toDateString());
 
-        $transactions = Transaction::with('transactionDetails.product')
-            ->whereDate('transaction_date', $date)
-            ->get();
+        $query = Transaction::with('transactionDetails.product.category')
+            ->whereDate('transaction_date', $date);
 
-        $summary = $this->buildSummary($transactions);
+        // Tambahkan filter kategori
+        if ($request->has('category_id')) {
+            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
+                $q->where('category_id', $request->category_id);
+            });
+        }
+
+        $transactions = $query->get();
+        $summary      = $this->buildSummary($transactions, $request->category_id ?? null);
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'date'         => $date,
-                'summary'      => $summary,
+                'date'        => $date,
+                'category_id' => $request->category_id ?? null,
+                'summary'     => $summary,
                 'transactions' => $transactions,
             ],
         ]);
@@ -43,25 +51,33 @@ class ReportController extends Controller
     public function weekly(Request $request): JsonResponse
     {
         $date      = $request->input('date', now()->toDateString());
-        $startDate = now()->parse($date)->startOfWeek()->toDateString(); // Senin
-        $endDate   = now()->parse($date)->endOfWeek()->toDateString();   // Minggu
+        $startDate = now()->parse($date)->startOfWeek()->toDateString();
+        $endDate   = now()->parse($date)->endOfWeek()->toDateString();
 
-        $transactions = Transaction::with('transactionDetails.product')
+        $query = Transaction::with('transactionDetails.product.category')
             ->whereBetween('transaction_date', [
                 $startDate . ' 00:00:00',
                 $endDate   . ' 23:59:59',
-            ])
-            ->get();
+            ]);
 
-        $summary    = $this->buildSummary($transactions);
+        if ($request->has('category_id')) {
+            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
+                $q->where('category_id', $request->category_id);
+            });
+        }
+
+        $transactions = $query->get();
+
+        $summary = $this->buildSummary($transactions, $request->category_id ?? null);
         $dailyBreakdown = $this->buildDailyBreakdown($transactions, $startDate, $endDate);
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'start_date'      => $startDate,
-                'end_date'        => $endDate,
-                'summary'         => $summary,
+                'start_date'  => $startDate,
+                'end_date'    => $endDate,
+                'category_id' => $request->category_id ?? null,
+                'summary'     => $summary,
                 'daily_breakdown' => $dailyBreakdown,
             ],
         ]);
@@ -73,20 +89,23 @@ class ReportController extends Controller
      */
     public function monthly(Request $request): JsonResponse
     {
-        $month      = $request->input('month', now()->format('Y-m'));
-        $startDate  = now()->parse($month . '-01')->startOfMonth()->toDateString();
-        $endDate    = now()->parse($month . '-01')->endOfMonth()->toDateString();
+        $month     = $request->input('month', now()->format('Y-m'));
+        $startDate = now()->parse($month . '-01')->startOfMonth()->toDateString();
+        $endDate   = now()->parse($month . '-01')->endOfMonth()->toDateString();
 
-        $transactions = Transaction::with('transactionDetails.product')
+        $query = Transaction::with('transactionDetails.product.category')
             ->whereBetween('transaction_date', [
                 $startDate . ' 00:00:00',
                 $endDate   . ' 23:59:59',
-            ])
-            ->get();
+            ]);
 
-        $summary        = $this->buildSummary($transactions);
-        $dailyBreakdown = $this->buildDailyBreakdown($transactions, $startDate, $endDate);
-        $topProducts    = $this->buildTopProducts($transactions);
+        if ($request->has('category_id')) {
+            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
+                $q->where('category_id', $request->category_id);
+            });
+        }
+
+        $transactions = $query->get();
 
         return response()->json([
             'success' => true,
@@ -94,9 +113,10 @@ class ReportController extends Controller
                 'month'           => $month,
                 'start_date'      => $startDate,
                 'end_date'        => $endDate,
-                'summary'         => $summary,
-                'daily_breakdown' => $dailyBreakdown,
-                'top_products'    => $topProducts,
+                'category_id'     => $request->category_id ?? null,
+                'summary'         => $this->buildSummary($transactions, $request->category_id ?? null),
+                'daily_breakdown' => $this->buildDailyBreakdown($transactions, $startDate, $endDate),
+                'top_products'    => $this->buildTopProducts($transactions),
             ],
         ]);
     }
@@ -112,26 +132,162 @@ class ReportController extends Controller
             'end_date'   => 'required|date|after_or_equal:start_date',
         ]);
 
-        $startDate = $request->start_date;
-        $endDate   = $request->end_date;
-
-        $transactions = Transaction::with('transactionDetails.product')
+        $query = Transaction::with('transactionDetails.product.category')
             ->whereBetween('transaction_date', [
-                $startDate . ' 00:00:00',
-                $endDate   . ' 23:59:59',
-            ])
-            ->get();
+                $request->start_date . ' 00:00:00',
+                $request->end_date   . ' 23:59:59',
+            ]);
 
-        $summary     = $this->buildSummary($transactions);
-        $topProducts = $this->buildTopProducts($transactions);
+        if ($request->has('category_id')) {
+            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
+                $q->where('category_id', $request->category_id);
+            });
+        }
+
+        $transactions = $query->get();
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'start_date'   => $startDate,
-                'end_date'     => $endDate,
-                'summary'      => $summary,
-                'top_products' => $topProducts,
+                'start_date'   => $request->start_date,
+                'end_date'     => $request->end_date,
+                'category_id'  => $request->category_id ?? null,
+                'summary'      => $this->buildSummary($transactions, $request->category_id ?? null),
+                'top_products' => $this->buildTopProducts($transactions),
+            ],
+        ]);
+    }
+
+    /**
+     * Data untuk grafik — revenue per hari dalam range.
+     * GET /api/reports/chart?start_date=2025-03-01&end_date=2025-03-31&category_id=1
+     */
+    public function chartData(Request $request): JsonResponse
+    {
+        $request->validate([
+            'start_date'  => 'required|date',
+            'end_date'    => 'required|date|after_or_equal:start_date',
+            'category_id' => 'nullable|exists:categories,id',
+        ]);
+
+        $startDate  = $request->start_date;
+        $endDate    = $request->end_date;
+        $categoryId = $request->category_id ?? null;
+
+        // Ambil semua transaksi dalam range
+        $query = Transaction::with('transactionDetails.product')
+            ->whereBetween('transaction_date', [
+                $startDate . ' 00:00:00',
+                $endDate   . ' 23:59:59',
+            ])
+            ->where('status', '!=', 'debt'); // hanya yang ada pembayarannya
+
+        if ($categoryId) {
+            $query->whereHas('transactionDetails.product', function ($q) use ($categoryId) {
+                $q->where('category_id', $categoryId);
+            });
+        }
+
+        $transactions = $query->get();
+
+        // Build chart data per hari
+        $chartData = [];
+        $current   = now()->parse($startDate);
+        $end       = now()->parse($endDate);
+
+        while ($current <= $end) {
+            $dateStr = $current->toDateString();
+
+            $dayTransactions = $transactions->filter(function ($t) use ($dateStr) {
+                return now()->parse($t->transaction_date)->toDateString() === $dateStr;
+            });
+
+            // Kalau ada filter kategori, hitung revenue hanya dari produk kategori itu
+            if ($categoryId) {
+                $revenue = 0;
+                foreach ($dayTransactions as $transaction) {
+                    foreach ($transaction->transactionDetails as $detail) {
+                        if ($detail->product && $detail->product->category_id == $categoryId) {
+                            $revenue += $detail->subtotal;
+                        }
+                    }
+                }
+            } else {
+                $revenue = $dayTransactions->sum('total_amount');
+            }
+
+            $chartData[] = [
+                'date'               => $dateStr,
+                'revenue'            => $revenue,
+                'total_transactions' => $dayTransactions->count(),
+            ];
+
+            $current->addDay();
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'start_date'  => $startDate,
+                'end_date'    => $endDate,
+                'category_id' => $categoryId,
+                'chart'       => $chartData,
+            ],
+        ]);
+    }
+
+    /**
+     * Breakdown revenue per kategori dalam range tanggal.
+     * GET /api/reports/category-breakdown?start_date=2025-03-01&end_date=2025-03-31
+     */
+    public function categoryBreakdown(Request $request): JsonResponse
+    {
+        $request->validate([
+            'start_date' => 'required|date',
+            'end_date'   => 'required|date|after_or_equal:start_date',
+        ]);
+
+        $details = TransactionDetail::with('product.category')
+            ->whereHas('transaction', function ($q) use ($request) {
+                $q->whereBetween('transaction_date', [
+                    $request->start_date . ' 00:00:00',
+                    $request->end_date   . ' 23:59:59',
+                ])->where('status', '!=', 'debt');
+            })
+            ->get();
+
+        // Group by kategori
+        $breakdown = [];
+
+        foreach ($details as $detail) {
+            $categoryId   = $detail->product->category_id ?? null;
+            $categoryName = $detail->product->category->name ?? 'Tidak berkategori';
+            $key          = $categoryId ?? 'uncategorized';
+
+            if (!isset($breakdown[$key])) {
+                $breakdown[$key] = [
+                    'category_id'    => $categoryId,
+                    'category_name'  => $categoryName,
+                    'total_revenue'  => 0,
+                    'total_quantity' => 0,
+                    'total_products' => 0,
+                ];
+            }
+
+            $breakdown[$key]['total_revenue']  += $detail->subtotal;
+            $breakdown[$key]['total_quantity'] += $detail->quantity;
+            $breakdown[$key]['total_products']++;
+        }
+
+        // Sort by revenue descending
+        usort($breakdown, fn($a, $b) => $b['total_revenue'] <=> $a['total_revenue']);
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'start_date' => $request->start_date,
+                'end_date'   => $request->end_date,
+                'breakdown'  => array_values($breakdown),
             ],
         ]);
     }
@@ -182,11 +338,11 @@ class ReportController extends Controller
         ]);
 
         $query = TransactionDetail::select(
-                'product_id',
-                'product_name',
-                DB::raw('SUM(quantity) as total_quantity'),
-                DB::raw('SUM(subtotal) as total_revenue')
-            )
+            'product_id',
+            'product_name',
+            DB::raw('SUM(quantity) as total_quantity'),
+            DB::raw('SUM(subtotal) as total_revenue')
+        )
             ->groupBy('product_id', 'product_name')
             ->orderByDesc('total_quantity')
             ->limit($request->input('limit', 10));
@@ -216,17 +372,30 @@ class ReportController extends Controller
     /**
      * Build ringkasan dari koleksi transaksi.
      */
-    private function buildSummary($transactions): array
+    private function buildSummary($transactions, ?int $categoryId = null): array
     {
+        // Kalau ada filter kategori, total revenue dihitung dari detail produk saja
+        if ($categoryId) {
+            $totalRevenue = 0;
+            foreach ($transactions as $transaction) {
+                foreach ($transaction->transactionDetails as $detail) {
+                    if ($detail->product && $detail->product->category_id == $categoryId) {
+                        $totalRevenue += $detail->subtotal;
+                    }
+                }
+            }
+        } else {
+            $totalRevenue = $transactions->sum('total_amount');
+        }
+
         $paid    = $transactions->where('status', 'paid');
         $partial = $transactions->where('status', 'partial');
         $debt    = $transactions->where('status', 'debt');
 
         return [
-            'total_transactions'  => $transactions->count(),
-            'total_revenue'       => $transactions->sum('total_amount'),
-            'total_collected'     => $transactions->sum('paid_amount'),    // uang yang beneran diterima
-            'total_debt'          => $transactions->sum('change_amount'),  // kembalian
+            'total_transactions' => $transactions->count(),
+            'total_revenue'      => $totalRevenue,
+            'total_collected'    => $transactions->sum('paid_amount'),
             'by_status' => [
                 'paid'    => ['count' => $paid->count(),    'amount' => $paid->sum('total_amount')],
                 'partial' => ['count' => $partial->count(), 'amount' => $partial->sum('total_amount')],
