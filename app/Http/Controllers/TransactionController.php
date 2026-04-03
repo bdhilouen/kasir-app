@@ -43,7 +43,7 @@ class TransactionController extends Controller
         }
 
         $transactions = $query->orderBy('transaction_date', 'desc')
-                              ->paginate($request->input('per_page', 15));
+            ->paginate($request->input('per_page', 15));
 
         return response()->json([
             'success' => true,
@@ -108,7 +108,7 @@ class TransactionController extends Controller
             // Buat transaksi
             $transaction = Transaction::create([
                 'invoice_number'  => $this->generateInvoiceNumber(),
-                'transaction_date'=> now(),
+                'transaction_date' => now(),
                 'customer_name'   => $validated['customer_name'] ?? null,
                 'total_amount'    => $totalAmount,
                 'paid_amount'     => $paidAmount,
@@ -186,7 +186,7 @@ class TransactionController extends Controller
             // Kembalikan stok produk
             foreach ($transaction->transactionDetails as $detail) {
                 Product::where('id', $detail->product_id)
-                       ->increment('stock', $detail->quantity);
+                    ->increment('stock', $detail->quantity);
             }
 
             // Hapus debt kalau ada
@@ -212,11 +212,43 @@ class TransactionController extends Controller
         $prefix = "INV-{$date}-";
 
         $last = Transaction::where('invoice_number', 'like', "{$prefix}%")
-                           ->orderBy('invoice_number', 'desc')
-                           ->value('invoice_number');
+            ->orderBy('invoice_number', 'desc')
+            ->value('invoice_number');
 
         $nextNumber = $last ? (int) substr($last, -4) + 1 : 1;
 
         return $prefix . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * Riwayat transaksi untuk kasir — maksimal 7 hari ke belakang.
+     * GET /api/transactions/cashier/history?date=2025-03-21
+     */
+    public function cashierHistory(Request $request): JsonResponse
+    {
+        $request->validate([
+            'date' => 'nullable|date',
+        ]);
+
+        $date      = $request->get('date', now()->toDateString());
+        $sevenDaysAgo = now()->subDays(7)->toDateString();
+
+        // Validasi — kasir tidak boleh lihat data lebih dari 7 hari ke belakang
+        if ($date < $sevenDaysAgo) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kasir hanya bisa melihat riwayat transaksi 7 hari ke belakang.',
+            ], 403);
+        }
+
+        $transactions = Transaction::with('transactionDetails.product')
+            ->whereDate('transaction_date', $date)
+            ->orderBy('transaction_date', 'desc')
+            ->paginate(15);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $transactions,
+        ]);
     }
 }
