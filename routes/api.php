@@ -23,29 +23,33 @@ Route::middleware('auth:sanctum')->group(function () {
     // ========================
     Route::middleware('cashier')->group(function () {
 
-        Route::patch('users/change-password', [UserController::class, 'changePassword']);
+        // Ganti password kasir
+        Route::patch('users/change-password',          [UserController::class, 'changePassword']);
 
         // Produk — kasir hanya bisa lihat
-        Route::get('products',              [ProductController::class, 'index']);
-        Route::get('products/by-category',  [ProductController::class, 'byCategory']);
-        Route::get('products/{product}',    [ProductController::class, 'show']);
+        Route::get('products',                         [ProductController::class, 'index']);
+        Route::get('products/by-category',             [ProductController::class, 'byCategory']);
+        Route::get('products/{product}',               [ProductController::class, 'show']);
 
         // Kategori — kasir hanya bisa lihat
-        Route::get('categories',            [CategoryController::class, 'index']);
-        Route::get('categories/{category}', [CategoryController::class, 'show']);
+        Route::get('categories',                       [CategoryController::class, 'index']);
+        Route::get('categories/{category}',            [CategoryController::class, 'show']);
 
         // Transaksi — kasir bisa input dan lihat
-        Route::post('transactions',                [TransactionController::class, 'store']);
-        Route::get('transactions/{transaction}',   [TransactionController::class, 'show']);
+        Route::post('transactions',                    [TransactionController::class, 'store']);
+        Route::get('transactions/{transaction}',       [TransactionController::class, 'show']);
 
         // Riwayat transaksi kasir — hanya 1 minggu ke belakang
-        Route::get('transactions/cashier/history', [TransactionController::class, 'cashierHistory']);
+        Route::get('transactions/cashier/history',     [TransactionController::class, 'cashierHistory']);
 
         // Hutang — kasir bisa lihat dan proses bayar
-        Route::get('debts',              [DebtController::class, 'index']);
-        Route::get('debts/{debt}',       [DebtController::class, 'show']);
-        Route::post('debts/{debt}/pay',  [DebtController::class, 'pay']);
-        Route::patch('debts/{debt}',     [DebtController::class, 'update']);
+        Route::get('debts',                            [DebtController::class, 'index']);
+        Route::get('debts/{debt}',                     [DebtController::class, 'show']);
+        Route::post('debts/{debt}/pay',                [DebtController::class, 'pay']);
+        Route::patch('debts/{debt}',                   [DebtController::class, 'update']);
+
+        // Void Transaksi
+        Route::post('transactions/{transaction}/void', [TransactionController::class, 'void']);
     });
 
     // ========================
@@ -85,5 +89,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('chart',               [ReportController::class, 'chartData']);
             Route::get('category-breakdown',  [ReportController::class, 'categoryBreakdown']);
         });
+
+        // Void Transaksi
+        Route::post('transactions/{transaction}/void', [TransactionController::class, 'void']);
     });
 });

@@ -21,7 +21,8 @@ class ReportController extends Controller
         $date = $request->input('date', now()->toDateString());
 
         $query = Transaction::with('transactionDetails.product.category')
-            ->whereDate('transaction_date', $date);
+            ->whereDate('transaction_date', $date)
+            ->where('is_voided', false); // hanya transaksi yang tidak void
 
         // Tambahkan filter kategori
         if ($request->has('category_id')) {
@@ -58,7 +59,8 @@ class ReportController extends Controller
             ->whereBetween('transaction_date', [
                 $startDate . ' 00:00:00',
                 $endDate   . ' 23:59:59',
-            ]);
+            ])
+            ->where('is_voided', false); // hanya transaksi yang tidak void
 
         if ($request->has('category_id')) {
             $query->whereHas('transactionDetails.product', function ($q) use ($request) {
@@ -97,7 +99,8 @@ class ReportController extends Controller
             ->whereBetween('transaction_date', [
                 $startDate . ' 00:00:00',
                 $endDate   . ' 23:59:59',
-            ]);
+            ])
+            ->where('is_voided', false); // hanya transaksi yang tidak void
 
         if ($request->has('category_id')) {
             $query->whereHas('transactionDetails.product', function ($q) use ($request) {
@@ -136,7 +139,8 @@ class ReportController extends Controller
             ->whereBetween('transaction_date', [
                 $request->start_date . ' 00:00:00',
                 $request->end_date   . ' 23:59:59',
-            ]);
+            ])
+            ->where('is_voided', false); // hanya transaksi yang tidak void
 
         if ($request->has('category_id')) {
             $query->whereHas('transactionDetails.product', function ($q) use ($request) {
@@ -180,7 +184,8 @@ class ReportController extends Controller
                 $startDate . ' 00:00:00',
                 $endDate   . ' 23:59:59',
             ])
-            ->where('status', '!=', 'debt'); // hanya yang ada pembayarannya
+            ->where('status', '!=', 'debt') // hanya yang ada pembayarannya
+            ->where('is_voided', false); // hanya transaksi yang tidak void
 
         if ($categoryId) {
             $query->whereHas('transactionDetails.product', function ($q) use ($categoryId) {

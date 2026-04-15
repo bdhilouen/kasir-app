@@ -14,10 +14,16 @@ class Transaction extends Model
         'paid_amount',
         'change_amount',
         'payment_method',
-        'status'
+        'status',
+        'is_voided',
+        'voided_at',
+        'void_reason',
+        'voided_by'
     ];
 
     protected $casts = [
+        'is_voided'        => 'boolean',
+        'voided_at'        => 'datetime',
         'transaction_date' => 'datetime'
     ];
 
@@ -27,6 +33,10 @@ class Transaction extends Model
 
     public function debt() {
         return $this->hasOne(Debt::class);
+    }
+
+    public function voidedBy() {
+        return $this->belongsTo(User::class, 'voided_by');
     }
 
 

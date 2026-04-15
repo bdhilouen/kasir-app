@@ -9,18 +9,22 @@ use App\Models\Debt;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 
 class TransactionController extends Controller
 {
     /**
-     * Display a listing of transactions.
+     * Display a listing of transactions — admin melihat semua termasuk yang void.
      * GET /api/transactions
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Transaction::with('transactionDetails.product');
+        $query = Transaction::with([
+            'transactionDetails.product',
+            'voidedBy:id,name',
+        ]);
 
-        // Filter by tanggal
+        // Filter tanggal
         if ($request->has('date')) {
             $query->whereDate('transaction_date', $request->date);
         }
@@ -32,18 +36,23 @@ class TransactionController extends Controller
             ]);
         }
 
-        // Filter by status
+        // Filter status
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }
 
-        // Filter by payment method
+        // Filter void — default tampilkan semua, bisa filter hanya void atau hanya aktif
+        if ($request->has('is_voided')) {
+            $query->where('is_voided', $request->boolean('is_voided'));
+        }
+
+        // Filter payment method
         if ($request->has('payment_method')) {
             $query->where('payment_method', $request->payment_method);
         }
 
         $transactions = $query->orderBy('transaction_date', 'desc')
-            ->paginate($request->input('per_page', 15));
+                              ->paginate($request->input('per_page', 15));
 
         return response()->json([
             'success' => true,
@@ -58,21 +67,18 @@ class TransactionController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'customer_name'  => 'nullable|string|max:150',
-            'payment_method' => 'required|in:cash,transfer,qris',
-            'paid_amount'    => 'required|numeric|min:0',
-            'items'          => 'required|array|min:1',
+            'customer_name'      => 'nullable|string|max:150',
+            'payment_method'     => 'required|in:cash,transfer,qris',
+            'paid_amount'        => 'required|numeric|min:0',
+            'items'              => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity'   => 'required|integer|min:1',
         ]);
 
-        // Wrap dalam DB transaction supaya kalau error, semua rollback
         $transaction = DB::transaction(function () use ($validated) {
-
             $totalAmount = 0;
             $itemsToSave = [];
 
-            // Kalkulasi total & validasi stok semua item dulu sebelum disimpan
             foreach ($validated['items'] as $item) {
                 $product = Product::lockForUpdate()->findOrFail($item['product_id']);
 
@@ -88,11 +94,10 @@ class TransactionController extends Controller
                     'quantity'     => $item['quantity'],
                     'price'        => $product->price,
                     'subtotal'     => $subtotal,
-                    'product_name' => $product->name, // snapshot nama produk
+                    'product_name' => $product->name,
                 ];
             }
 
-            // Hitung kembalian & status
             $paidAmount   = $validated['paid_amount'];
             $changeAmount = max(0, $paidAmount - $totalAmount);
             $remaining    = $totalAmount - $paidAmount;
@@ -105,19 +110,18 @@ class TransactionController extends Controller
                 $status = 'partial';
             }
 
-            // Buat transaksi
             $transaction = Transaction::create([
-                'invoice_number'  => $this->generateInvoiceNumber(),
+                'invoice_number'   => $this->generateInvoiceNumber(),
                 'transaction_date' => now(),
-                'customer_name'   => $validated['customer_name'] ?? null,
-                'total_amount'    => $totalAmount,
-                'paid_amount'     => $paidAmount,
-                'change_amount'   => $changeAmount,
-                'payment_method'  => $validated['payment_method'],
-                'status'          => $status,
+                'customer_name'    => $validated['customer_name'] ?? null,
+                'total_amount'     => $totalAmount,
+                'paid_amount'      => $paidAmount,
+                'change_amount'    => $changeAmount,
+                'payment_method'   => $validated['payment_method'],
+                'status'           => $status,
+                'is_voided'        => false,
             ]);
 
-            // Simpan detail & kurangi stok
             foreach ($itemsToSave as $item) {
                 TransactionDetail::create([
                     'transaction_id' => $transaction->id,
@@ -128,11 +132,9 @@ class TransactionController extends Controller
                     'subtotal'       => $item['subtotal'],
                 ]);
 
-                // Kurangi stok produk
                 $item['product']->decrement('stock', $item['quantity']);
             }
 
-            // Kalau hutang, buat record di tabel debts
             if (in_array($status, ['debt', 'partial'])) {
                 Debt::create([
                     'transaction_id' => $transaction->id,
@@ -160,7 +162,10 @@ class TransactionController extends Controller
      */
     public function show(Transaction $transaction): JsonResponse
     {
-        $transaction->load('transactionDetails.product');
+        $transaction->load([
+            'transactionDetails.product',
+            'voidedBy:id,name',
+        ]);
 
         return response()->json([
             'success' => true,
@@ -169,60 +174,70 @@ class TransactionController extends Controller
     }
 
     /**
-     * Transaksi tidak boleh diedit, hanya bisa void/cancel.
-     * DELETE /api/transactions/{id}
+     * Void transaksi — stok dikembalikan, data tetap tersimpan.
+     * POST /api/transactions/{id}/void
      */
-    public function destroy(Transaction $transaction): JsonResponse
+    public function void(Request $request, Transaction $transaction): JsonResponse
     {
-        // Transaksi yang sudah lunas tidak bisa dibatalkan
-        if ($transaction->status === 'paid') {
+        // Cek apakah transaksi sudah di-void sebelumnya
+        if ($transaction->is_voided) {
             return response()->json([
                 'success' => false,
-                'message' => 'Transaksi yang sudah lunas tidak bisa dibatalkan.',
+                'message' => 'Transaksi ini sudah pernah dibatalkan.',
             ], 422);
         }
 
-        DB::transaction(function () use ($transaction) {
-            // Kembalikan stok produk
+        $validated = $request->validate([
+            'password'    => 'required|string',
+            'void_reason' => 'nullable|string|max:255',
+        ]);
+
+        // Verifikasi password kasir yang sedang login
+        if (!Hash::check($validated['password'], $request->user()->password)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Password salah. Void transaksi dibatalkan.',
+            ], 403);
+        }
+
+        DB::transaction(function () use ($transaction, $validated, $request) {
+
+            // Kembalikan stok semua produk
             foreach ($transaction->transactionDetails as $detail) {
                 Product::where('id', $detail->product_id)
-                    ->increment('stock', $detail->quantity);
+                       ->increment('stock', $detail->quantity);
             }
 
-            // Hapus debt kalau ada
-            $transaction->debt()->delete();
+            // Void debt juga kalau ada
+            if ($transaction->debt) {
+                $transaction->debt->update([
+                    'status' => 'paid', // tutup hutangnya karena transaksi dibatalkan
+                    'notes'  => 'Transaksi di-void: ' . ($validated['void_reason'] ?? 'Tidak ada alasan'),
+                ]);
+            }
 
-            // Hapus transaksi (detail ikut terhapus karena cascade)
-            $transaction->delete();
+            // Update transaksi jadi void — data tetap ada
+            $transaction->update([
+                'is_voided'   => true,
+                'voided_at'   => now(),
+                'void_reason' => $validated['void_reason'] ?? null,
+                'voided_by'   => $request->user()->id,
+            ]);
         });
 
         return response()->json([
             'success' => true,
             'message' => 'Transaksi berhasil dibatalkan dan stok dikembalikan.',
+            'data'    => $transaction->fresh()->load([
+                'transactionDetails.product',
+                'voidedBy:id,name',
+            ]),
         ]);
     }
 
     /**
-     * Generate nomor invoice otomatis.
-     * Format: INV-YYYYMMDD-XXXX (contoh: INV-20250321-0001)
-     */
-    private function generateInvoiceNumber(): string
-    {
-        $date   = now()->format('Ymd');
-        $prefix = "INV-{$date}-";
-
-        $last = Transaction::where('invoice_number', 'like', "{$prefix}%")
-            ->orderBy('invoice_number', 'desc')
-            ->value('invoice_number');
-
-        $nextNumber = $last ? (int) substr($last, -4) + 1 : 1;
-
-        return $prefix . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
-    }
-
-    /**
-     * Riwayat transaksi untuk kasir — maksimal 7 hari ke belakang.
-     * GET /api/transactions/cashier/history?date=2025-03-21
+     * Riwayat transaksi untuk kasir — maksimal 7 hari ke belakang, tidak tampilkan void.
+     * GET /api/transactions/cashier/history
      */
     public function cashierHistory(Request $request): JsonResponse
     {
@@ -230,10 +245,9 @@ class TransactionController extends Controller
             'date' => 'nullable|date',
         ]);
 
-        $date      = $request->get('date', now()->toDateString());
+        $date         = $request->input('date', now()->toDateString());
         $sevenDaysAgo = now()->subDays(7)->toDateString();
 
-        // Validasi — kasir tidak boleh lihat data lebih dari 7 hari ke belakang
         if ($date < $sevenDaysAgo) {
             return response()->json([
                 'success' => false,
@@ -243,6 +257,7 @@ class TransactionController extends Controller
 
         $transactions = Transaction::with('transactionDetails.product')
             ->whereDate('transaction_date', $date)
+            ->where('is_voided', false) // kasir tidak perlu lihat yang void
             ->orderBy('transaction_date', 'desc')
             ->paginate(15);
 
@@ -250,5 +265,19 @@ class TransactionController extends Controller
             'success' => true,
             'data'    => $transactions,
         ]);
+    }
+
+    private function generateInvoiceNumber(): string
+    {
+        $date   = now()->format('Ymd');
+        $prefix = "INV-{$date}-";
+
+        $last = Transaction::where('invoice_number', 'like', "{$prefix}%")
+                           ->orderBy('invoice_number', 'desc')
+                           ->value('invoice_number');
+
+        $nextNumber = $last ? (int) substr($last, -4) + 1 : 1;
+
+        return $prefix . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
     }
 }
