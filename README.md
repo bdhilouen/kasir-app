@@ -86,7 +86,22 @@ DB_PASSWORD=yourpassword
 php artisan migrate
 ```
 
-### 6. Run Server
+### 6. Run Seeder
+
+```bash
+php artisan db:seed --class=UserSeeder
+php artisan db:seed --class=CategorySeeder
+php artisan db:seed --class=ProductSeeder
+php artisan db:seed --class=TransactionSeeder
+```
+
+### 7. Run Debt Syncrhonization
+
+```bash
+php artisan debts:sync
+```
+
+### 8. Run Server
 
 ```bash
 php artisan serve

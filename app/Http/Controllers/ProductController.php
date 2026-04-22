@@ -66,9 +66,15 @@ class ProductController extends Controller
      * Store a newly created resource in storage.
      * POST /api/products
      */
+    /**
+     * Store a newly created resource in storage.
+     * POST /api/products
+     */
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
+            // Tambahkan validasi category_id disini
+            'category_id' => 'nullable|exists:categories,id',
             'name'        => 'required|string|max:150',
             'sku'         => 'required|string|max:100|unique:products,sku',
             'price'       => 'required|numeric|min:0',
@@ -78,6 +84,9 @@ class ProductController extends Controller
         ]);
 
         $product = Product::create($validated);
+
+        // Load relasi category agar response API langsung menampilkan detail kategorinya
+        $product->load('category');
 
         return response()->json([
             'success' => true,
@@ -105,6 +114,8 @@ class ProductController extends Controller
     public function update(Request $request, Product $product): JsonResponse
     {
         $validated = $request->validate([
+            // Tambahkan validasi category_id disini juga
+            'category_id' => 'sometimes|nullable|exists:categories,id',
             'name'        => 'sometimes|required|string|max:150',
             'sku'         => "sometimes|required|string|max:100|unique:products,sku,{$product->id}",
             'price'       => 'sometimes|required|numeric|min:0',
@@ -115,10 +126,11 @@ class ProductController extends Controller
 
         $product->update($validated);
 
+        // fresh() mengambil data terbaru dari database beserta relasi category-nya
         return response()->json([
             'success' => true,
             'message' => 'Produk berhasil diperbarui.',
-            'data'    => $product->fresh(), // fresh() = ambil data terbaru dari DB
+            'data'    => $product->fresh('category'),
         ]);
     }
 
