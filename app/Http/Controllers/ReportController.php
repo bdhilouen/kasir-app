@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Models\Transaction;
 use App\Models\TransactionDetail;
 use App\Models\Debt;
-use App\Models\Product;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -18,69 +17,60 @@ class ReportController extends Controller
      */
     public function daily(Request $request): JsonResponse
     {
-        $date = $request->input('date', now()->toDateString());
+        $date       = $request->input('date', now()->toDateString());
+        $categoryId = $request->input('category_id');
 
-        $query = Transaction::with('transactionDetails.product.category')
+        // Ambil summary langsung dari DB — tidak load transaksi ke memory
+        $summary = $this->buildSummaryFromDB(
+            startDate:  $date,
+            endDate:    $date,
+            categoryId: $categoryId,
+        );
+
+        // Transaksi hanya diload untuk ditampilkan di list, bukan untuk kalkulasi
+        $query = Transaction::with([
+                'transactionDetails:id,transaction_id,product_id,product_name,price,quantity,subtotal',
+            ])
             ->whereDate('transaction_date', $date)
-            ->where('is_voided', false); // hanya transaksi yang tidak void
+            ->where('is_voided', false)
+            ->orderBy('transaction_date', 'desc');
 
-        // Tambahkan filter kategori
-        if ($request->has('category_id')) {
-            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
-                $q->where('category_id', $request->category_id);
-            });
+        if ($categoryId) {
+            $query->whereHas('transactionDetails.product', fn($q) =>
+                $q->where('category_id', $categoryId)
+            );
         }
-
-        $transactions = $query->get();
-        $summary      = $this->buildSummary($transactions, $request->category_id ?? null);
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'date'        => $date,
-                'category_id' => $request->category_id ?? null,
-                'summary'     => $summary,
-                'transactions' => $transactions,
+                'date'         => $date,
+                'category_id'  => $categoryId,
+                'summary'      => $summary,
+                'transactions' => $query->get(),
             ],
         ]);
     }
 
     /**
      * Laporan penjualan mingguan.
-     * GET /api/reports/weekly?date=2025-03-21 (date = hari apa saja dalam minggu itu)
+     * GET /api/reports/weekly?date=2025-03-21
      */
     public function weekly(Request $request): JsonResponse
     {
-        $date      = $request->input('date', now()->toDateString());
-        $startDate = now()->parse($date)->startOfWeek()->toDateString();
-        $endDate   = now()->parse($date)->endOfWeek()->toDateString();
-
-        $query = Transaction::with('transactionDetails.product.category')
-            ->whereBetween('transaction_date', [
-                $startDate . ' 00:00:00',
-                $endDate   . ' 23:59:59',
-            ])
-            ->where('is_voided', false); // hanya transaksi yang tidak void
-
-        if ($request->has('category_id')) {
-            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
-                $q->where('category_id', $request->category_id);
-            });
-        }
-
-        $transactions = $query->get();
-
-        $summary = $this->buildSummary($transactions, $request->category_id ?? null);
-        $dailyBreakdown = $this->buildDailyBreakdown($transactions, $startDate, $endDate);
+        $date       = $request->input('date', now()->toDateString());
+        $categoryId = $request->input('category_id');
+        $startDate  = now()->parse($date)->startOfWeek()->toDateString();
+        $endDate    = now()->parse($date)->endOfWeek()->toDateString();
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'start_date'  => $startDate,
-                'end_date'    => $endDate,
-                'category_id' => $request->category_id ?? null,
-                'summary'     => $summary,
-                'daily_breakdown' => $dailyBreakdown,
+                'start_date'      => $startDate,
+                'end_date'        => $endDate,
+                'category_id'     => $categoryId,
+                'summary'         => $this->buildSummaryFromDB($startDate, $endDate, $categoryId),
+                'daily_breakdown' => $this->buildDailyBreakdownFromDB($startDate, $endDate, $categoryId),
             ],
         ]);
     }
@@ -91,24 +81,10 @@ class ReportController extends Controller
      */
     public function monthly(Request $request): JsonResponse
     {
-        $month     = $request->input('month', now()->format('Y-m'));
-        $startDate = now()->parse($month . '-01')->startOfMonth()->toDateString();
-        $endDate   = now()->parse($month . '-01')->endOfMonth()->toDateString();
-
-        $query = Transaction::with('transactionDetails.product.category')
-            ->whereBetween('transaction_date', [
-                $startDate . ' 00:00:00',
-                $endDate   . ' 23:59:59',
-            ])
-            ->where('is_voided', false); // hanya transaksi yang tidak void
-
-        if ($request->has('category_id')) {
-            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
-                $q->where('category_id', $request->category_id);
-            });
-        }
-
-        $transactions = $query->get();
+        $month      = $request->input('month', now()->format('Y-m'));
+        $categoryId = $request->input('category_id');
+        $startDate  = now()->parse($month . '-01')->startOfMonth()->toDateString();
+        $endDate    = now()->parse($month . '-01')->endOfMonth()->toDateString();
 
         return response()->json([
             'success' => true,
@@ -116,10 +92,10 @@ class ReportController extends Controller
                 'month'           => $month,
                 'start_date'      => $startDate,
                 'end_date'        => $endDate,
-                'category_id'     => $request->category_id ?? null,
-                'summary'         => $this->buildSummary($transactions, $request->category_id ?? null),
-                'daily_breakdown' => $this->buildDailyBreakdown($transactions, $startDate, $endDate),
-                'top_products'    => $this->buildTopProducts($transactions),
+                'category_id'     => $categoryId,
+                'summary'         => $this->buildSummaryFromDB($startDate, $endDate, $categoryId),
+                'daily_breakdown' => $this->buildDailyBreakdownFromDB($startDate, $endDate, $categoryId),
+                'top_products'    => $this->buildTopProductsFromDB($startDate, $endDate, $categoryId),
             ],
         ]);
     }
@@ -135,29 +111,16 @@ class ReportController extends Controller
             'end_date'   => 'required|date|after_or_equal:start_date',
         ]);
 
-        $query = Transaction::with('transactionDetails.product.category')
-            ->whereBetween('transaction_date', [
-                $request->start_date . ' 00:00:00',
-                $request->end_date   . ' 23:59:59',
-            ])
-            ->where('is_voided', false); // hanya transaksi yang tidak void
-
-        if ($request->has('category_id')) {
-            $query->whereHas('transactionDetails.product', function ($q) use ($request) {
-                $q->where('category_id', $request->category_id);
-            });
-        }
-
-        $transactions = $query->get();
+        $categoryId = $request->input('category_id');
 
         return response()->json([
             'success' => true,
             'data'    => [
                 'start_date'   => $request->start_date,
                 'end_date'     => $request->end_date,
-                'category_id'  => $request->category_id ?? null,
-                'summary'      => $this->buildSummary($transactions, $request->category_id ?? null),
-                'top_products' => $this->buildTopProducts($transactions),
+                'category_id'  => $categoryId,
+                'summary'      => $this->buildSummaryFromDB($request->start_date, $request->end_date, $categoryId),
+                'top_products' => $this->buildTopProductsFromDB($request->start_date, $request->end_date, $categoryId),
             ],
         ]);
     }
@@ -176,59 +139,10 @@ class ReportController extends Controller
 
         $startDate  = $request->start_date;
         $endDate    = $request->end_date;
-        $categoryId = $request->category_id ?? null;
+        $categoryId = $request->input('category_id');
 
-        // Ambil semua transaksi dalam range
-        $query = Transaction::with('transactionDetails.product')
-            ->whereBetween('transaction_date', [
-                $startDate . ' 00:00:00',
-                $endDate   . ' 23:59:59',
-            ])
-            ->where('status', '!=', 'debt') // hanya yang ada pembayarannya
-            ->where('is_voided', false); // hanya transaksi yang tidak void
-
-        if ($categoryId) {
-            $query->whereHas('transactionDetails.product', function ($q) use ($categoryId) {
-                $q->where('category_id', $categoryId);
-            });
-        }
-
-        $transactions = $query->get();
-
-        // Build chart data per hari
-        $chartData = [];
-        $current   = now()->parse($startDate);
-        $end       = now()->parse($endDate);
-
-        while ($current <= $end) {
-            $dateStr = $current->toDateString();
-
-            $dayTransactions = $transactions->filter(function ($t) use ($dateStr) {
-                return now()->parse($t->transaction_date)->toDateString() === $dateStr;
-            });
-
-            // Kalau ada filter kategori, hitung revenue hanya dari produk kategori itu
-            if ($categoryId) {
-                $revenue = 0;
-                foreach ($dayTransactions as $transaction) {
-                    foreach ($transaction->transactionDetails as $detail) {
-                        if ($detail->product && $detail->product->category_id == $categoryId) {
-                            $revenue += $detail->subtotal;
-                        }
-                    }
-                }
-            } else {
-                $revenue = $dayTransactions->sum('total_amount');
-            }
-
-            $chartData[] = [
-                'date'               => $dateStr,
-                'revenue'            => $revenue,
-                'total_transactions' => $dayTransactions->count(),
-            ];
-
-            $current->addDay();
-        }
+        // Semua kalkulasi dilakukan di DB — tidak ada loop di PHP
+        $chartData = $this->buildDailyBreakdownFromDB($startDate, $endDate, $categoryId);
 
         return response()->json([
             'success' => true,
@@ -252,47 +166,34 @@ class ReportController extends Controller
             'end_date'   => 'required|date|after_or_equal:start_date',
         ]);
 
-        $details = TransactionDetail::with('product.category')
-            ->whereHas('transaction', function ($q) use ($request) {
+        // Semua grouping dilakukan di DB — tidak ada loop PHP
+        $breakdown = TransactionDetail::select(
+                'products.category_id',
+                DB::raw("COALESCE(categories.name, 'Tidak berkategori') as category_name"),
+                DB::raw('SUM(transaction_details.subtotal) as total_revenue'),
+                DB::raw('SUM(transaction_details.quantity) as total_quantity'),
+                DB::raw('COUNT(transaction_details.id) as total_items'),
+            )
+            ->join('products', 'products.id', '=', 'transaction_details.product_id')
+            ->leftJoin('categories', 'categories.id', '=', 'products.category_id')
+            ->whereHas('transaction', fn($q) =>
                 $q->whereBetween('transaction_date', [
-                    $request->start_date . ' 00:00:00',
-                    $request->end_date   . ' 23:59:59',
-                ])->where('status', '!=', 'debt');
-            })
+                        $request->start_date . ' 00:00:00',
+                        $request->end_date   . ' 23:59:59',
+                    ])
+                    ->where('is_voided', false)
+                    ->where('status', '!=', 'debt')
+            )
+            ->groupBy('products.category_id', 'categories.name')
+            ->orderByDesc('total_revenue')
             ->get();
-
-        // Group by kategori
-        $breakdown = [];
-
-        foreach ($details as $detail) {
-            $categoryId   = $detail->product->category_id ?? null;
-            $categoryName = $detail->product->category->name ?? 'Tidak berkategori';
-            $key          = $categoryId ?? 'uncategorized';
-
-            if (!isset($breakdown[$key])) {
-                $breakdown[$key] = [
-                    'category_id'    => $categoryId,
-                    'category_name'  => $categoryName,
-                    'total_revenue'  => 0,
-                    'total_quantity' => 0,
-                    'total_products' => 0,
-                ];
-            }
-
-            $breakdown[$key]['total_revenue']  += $detail->subtotal;
-            $breakdown[$key]['total_quantity'] += $detail->quantity;
-            $breakdown[$key]['total_products']++;
-        }
-
-        // Sort by revenue descending
-        usort($breakdown, fn($a, $b) => $b['total_revenue'] <=> $a['total_revenue']);
 
         return response()->json([
             'success' => true,
             'data'    => [
                 'start_date' => $request->start_date,
                 'end_date'   => $request->end_date,
-                'breakdown'  => array_values($breakdown),
+                'breakdown'  => $breakdown,
             ],
         ]);
     }
@@ -301,19 +202,33 @@ class ReportController extends Controller
      * Rekap hutang.
      * GET /api/reports/debts
      */
-    public function debtSummary(Request $request): JsonResponse
+    public function debtSummary(): JsonResponse
     {
-        $totalUnpaid = Debt::where('status', 'unpaid')->sum('remaining_debt');
-        $totalPartial = Debt::where('status', 'partial')->sum('remaining_debt');
+        // 1 query untuk total unpaid dan partial sekaligus
+        $totals = Debt::whereIn('status', ['unpaid', 'partial'])
+            ->select(
+                'status',
+                DB::raw('SUM(remaining_debt) as total'),
+            )
+            ->groupBy('status')
+            ->pluck('total', 'status');
 
-        $overdueDebts = Debt::with('transaction')
+        $totalUnpaid  = $totals['unpaid']  ?? 0;
+        $totalPartial = $totals['partial'] ?? 0;
+
+        $overdueDebts = Debt::with('transaction:id,invoice_number,transaction_date')
             ->whereIn('status', ['unpaid', 'partial'])
-            ->where('due_date', '<', now()->toDateString())
             ->whereNotNull('due_date')
+            ->where('due_date', '<', now()->toDateString())
+            ->select('id', 'transaction_id', 'customer_name', 'remaining_debt', 'due_date', 'status')
             ->get();
 
         $debtsByCustomer = Debt::whereIn('status', ['unpaid', 'partial'])
-            ->select('customer_name', DB::raw('SUM(remaining_debt) as total_remaining'))
+            ->select(
+                'customer_name',
+                DB::raw('SUM(remaining_debt) as total_remaining'),
+                DB::raw('COUNT(*) as total_hutang'),
+            )
             ->groupBy('customer_name')
             ->orderByDesc('total_remaining')
             ->get();
@@ -337,32 +252,18 @@ class ReportController extends Controller
     public function topProducts(Request $request): JsonResponse
     {
         $request->validate([
-            'start_date' => 'nullable|date',
-            'end_date'   => 'nullable|date|after_or_equal:start_date',
-            'limit'      => 'nullable|integer|min:1|max:50',
+            'start_date'  => 'nullable|date',
+            'end_date'    => 'nullable|date|after_or_equal:start_date',
+            'category_id' => 'nullable|exists:categories,id',
+            'limit'       => 'nullable|integer|min:1|max:50',
         ]);
 
-        $query = TransactionDetail::select(
-            'product_id',
-            'product_name',
-            DB::raw('SUM(quantity) as total_quantity'),
-            DB::raw('SUM(subtotal) as total_revenue')
-        )
-            ->groupBy('product_id', 'product_name')
-            ->orderByDesc('total_quantity')
-            ->limit($request->input('limit', 10));
-
-        // Filter by tanggal kalau ada
-        if ($request->has('start_date') && $request->has('end_date')) {
-            $query->whereHas('transaction', function ($q) use ($request) {
-                $q->whereBetween('transaction_date', [
-                    $request->start_date . ' 00:00:00',
-                    $request->end_date   . ' 23:59:59',
-                ]);
-            });
-        }
-
-        $topProducts = $query->get();
+        $topProducts = $this->buildTopProductsFromDB(
+            startDate:  $request->start_date,
+            endDate:    $request->end_date,
+            categoryId: $request->input('category_id'),
+            limit:      $request->input('limit', 10),
+        );
 
         return response()->json([
             'success' => true,
@@ -370,104 +271,181 @@ class ReportController extends Controller
         ]);
     }
 
-    // ========================
-    // Private Helper Methods
-    // ========================
+    // ============================================================
+    // Private Helper Methods — semua kalkulasi dilakukan di DB
+    // ============================================================
 
     /**
-     * Build ringkasan dari koleksi transaksi.
+     * Build summary langsung dari DB tanpa load transaksi ke memory.
      */
-    private function buildSummary($transactions, ?int $categoryId = null): array
-    {
-        // Kalau ada filter kategori, total revenue dihitung dari detail produk saja
+    private function buildSummaryFromDB(
+        string  $startDate,
+        string  $endDate,
+        ?int    $categoryId = null,
+    ): array {
+        $baseQuery = Transaction::whereBetween('transaction_date', [
+                $startDate . ' 00:00:00',
+                $endDate   . ' 23:59:59',
+            ])
+            ->where('is_voided', false);
+
         if ($categoryId) {
-            $totalRevenue = 0;
-            foreach ($transactions as $transaction) {
-                foreach ($transaction->transactionDetails as $detail) {
-                    if ($detail->product && $detail->product->category_id == $categoryId) {
-                        $totalRevenue += $detail->subtotal;
-                    }
-                }
-            }
-        } else {
-            $totalRevenue = $transactions->sum('total_amount');
+            $baseQuery->whereHas('transactionDetails.product', fn($q) =>
+                $q->where('category_id', $categoryId)
+            );
         }
 
-        $paid    = $transactions->where('status', 'paid');
-        $partial = $transactions->where('status', 'partial');
-        $debt    = $transactions->where('status', 'debt');
+        // Kalau ada filter kategori, revenue dihitung dari detail produk
+        if ($categoryId) {
+            $totalRevenue = TransactionDetail::whereHas('transaction', fn($q) =>
+                    $q->whereBetween('transaction_date', [
+                            $startDate . ' 00:00:00',
+                            $endDate   . ' 23:59:59',
+                        ])
+                        ->where('is_voided', false)
+                )
+                ->whereHas('product', fn($q) => $q->where('category_id', $categoryId))
+                ->sum('subtotal');
+        } else {
+            $totalRevenue = (clone $baseQuery)->sum('total_amount');
+        }
+
+        // Aggregasi per status — 1 query
+        $byStatus = (clone $baseQuery)
+            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total_amount) as amount'))
+            ->groupBy('status')
+            ->get()
+            ->keyBy('status');
+
+        // Aggregasi per payment method — 1 query
+        $byPayment = (clone $baseQuery)
+            ->select('payment_method', DB::raw('SUM(paid_amount) as total'))
+            ->groupBy('payment_method')
+            ->get()
+            ->keyBy('payment_method');
+
+        $totalTransactions = (clone $baseQuery)->count();
+        $totalCollected    = (clone $baseQuery)->sum('paid_amount');
 
         return [
-            'total_transactions' => $transactions->count(),
+            'total_transactions' => $totalTransactions,
             'total_revenue'      => $totalRevenue,
-            'total_collected'    => $transactions->sum('paid_amount'),
-            'by_status' => [
-                'paid'    => ['count' => $paid->count(),    'amount' => $paid->sum('total_amount')],
-                'partial' => ['count' => $partial->count(), 'amount' => $partial->sum('total_amount')],
-                'debt'    => ['count' => $debt->count(),    'amount' => $debt->sum('total_amount')],
+            'total_collected'    => $totalCollected,
+            'by_status'          => [
+                'paid'    => ['count' => $byStatus['paid']->count    ?? 0, 'amount' => $byStatus['paid']->amount    ?? 0],
+                'partial' => ['count' => $byStatus['partial']->count ?? 0, 'amount' => $byStatus['partial']->amount ?? 0],
+                'debt'    => ['count' => $byStatus['debt']->count    ?? 0, 'amount' => $byStatus['debt']->amount    ?? 0],
             ],
-            'by_payment_method' => [
-                'cash'     => $transactions->where('payment_method', 'cash')->sum('paid_amount'),
-                'transfer' => $transactions->where('payment_method', 'transfer')->sum('paid_amount'),
-                'qris'     => $transactions->where('payment_method', 'qris')->sum('paid_amount'),
+            'by_payment_method'  => [
+                'cash'     => $byPayment['cash']->total     ?? 0,
+                'transfer' => $byPayment['transfer']->total ?? 0,
+                'qris'     => $byPayment['qris']->total     ?? 0,
             ],
         ];
     }
 
     /**
-     * Build breakdown per hari dalam range tanggal.
+     * Build daily breakdown langsung dari DB — tidak ada loop PHP per hari.
+     * PostgreSQL generate_series dipakai untuk mengisi hari yang kosong.
      */
-    private function buildDailyBreakdown($transactions, string $startDate, string $endDate): array
-    {
-        $breakdown = [];
-        $current   = now()->parse($startDate);
-        $end       = now()->parse($endDate);
-
-        while ($current <= $end) {
-            $dateStr       = $current->toDateString();
-            $dayTransactions = $transactions->filter(function ($t) use ($dateStr) {
-                return now()->parse($t->transaction_date)->toDateString() === $dateStr;
-            });
-
-            $breakdown[] = [
-                'date'                => $dateStr,
-                'total_transactions'  => $dayTransactions->count(),
-                'total_revenue'       => $dayTransactions->sum('total_amount'),
-                'total_collected'     => $dayTransactions->sum('paid_amount'),
-            ];
-
-            $current->addDay();
+    private function buildDailyBreakdownFromDB(
+        string $startDate,
+        string $endDate,
+        ?int   $categoryId = null,
+    ): array {
+        // Kalau ada filter kategori, revenue dari detail; kalau tidak, dari transaksi
+        if ($categoryId) {
+            $rows = DB::select("
+                SELECT
+                    d::date AS date,
+                    COALESCE(SUM(td.subtotal), 0)        AS revenue,
+                    COALESCE(COUNT(DISTINCT t.id), 0)    AS total_transactions,
+                    COALESCE(SUM(t.paid_amount), 0)      AS total_collected
+                FROM generate_series(
+                    :start::date,
+                    :end::date,
+                    '1 day'::interval
+                ) AS d
+                LEFT JOIN transactions t
+                    ON t.transaction_date::date = d::date
+                    AND t.is_voided = false
+                    AND t.status != 'debt'
+                LEFT JOIN transaction_details td
+                    ON td.transaction_id = t.id
+                LEFT JOIN products p
+                    ON p.id = td.product_id
+                    AND p.category_id = :category_id
+                GROUP BY d
+                ORDER BY d
+            ", [
+                'start'       => $startDate,
+                'end'         => $endDate,
+                'category_id' => $categoryId,
+            ]);
+        } else {
+            $rows = DB::select("
+                SELECT
+                    d::date AS date,
+                    COALESCE(SUM(t.total_amount), 0)  AS revenue,
+                    COALESCE(COUNT(t.id), 0)          AS total_transactions,
+                    COALESCE(SUM(t.paid_amount), 0)   AS total_collected
+                FROM generate_series(
+                    :start::date,
+                    :end::date,
+                    '1 day'::interval
+                ) AS d
+                LEFT JOIN transactions t
+                    ON t.transaction_date::date = d::date
+                    AND t.is_voided = false
+                GROUP BY d
+                ORDER BY d
+            ", [
+                'start' => $startDate,
+                'end'   => $endDate,
+            ]);
         }
 
-        return $breakdown;
+        return array_map(fn($row) => [
+            'date'               => $row->date,
+            'revenue'            => (float) $row->revenue,
+            'total_transactions' => (int)   $row->total_transactions,
+            'total_collected'    => (float) $row->total_collected,
+        ], $rows);
     }
 
     /**
-     * Build top produk dari koleksi transaksi.
+     * Build top products langsung dari DB.
      */
-    private function buildTopProducts($transactions): array
-    {
-        $productSales = [];
+    private function buildTopProductsFromDB(
+        ?string $startDate  = null,
+        ?string $endDate    = null,
+        ?int    $categoryId = null,
+        int     $limit      = 10,
+    ): array {
+        $query = TransactionDetail::select(
+                'transaction_details.product_id',
+                'transaction_details.product_name',
+                DB::raw('SUM(transaction_details.quantity) as total_quantity'),
+                DB::raw('SUM(transaction_details.subtotal) as total_revenue'),
+            )
+            ->join('transactions', 'transactions.id', '=', 'transaction_details.transaction_id')
+            ->where('transactions.is_voided', false)
+            ->groupBy('transaction_details.product_id', 'transaction_details.product_name')
+            ->orderByDesc('total_quantity')
+            ->limit($limit);
 
-        foreach ($transactions as $transaction) {
-            foreach ($transaction->transactionDetails as $detail) {
-                $key = $detail->product_id;
-                if (!isset($productSales[$key])) {
-                    $productSales[$key] = [
-                        'product_id'     => $detail->product_id,
-                        'product_name'   => $detail->product_name,
-                        'total_quantity' => 0,
-                        'total_revenue'  => 0,
-                    ];
-                }
-                $productSales[$key]['total_quantity'] += $detail->quantity;
-                $productSales[$key]['total_revenue']  += $detail->subtotal;
-            }
+        if ($startDate && $endDate) {
+            $query->whereBetween('transactions.transaction_date', [
+                $startDate . ' 00:00:00',
+                $endDate   . ' 23:59:59',
+            ]);
         }
 
-        // Sort by total_quantity descending
-        usort($productSales, fn($a, $b) => $b['total_quantity'] <=> $a['total_quantity']);
+        if ($categoryId) {
+            $query->join('products', 'products.id', '=', 'transaction_details.product_id')
+                  ->where('products.category_id', $categoryId);
+        }
 
-        return array_values($productSales);
+        return $query->get()->toArray();
     }
 }
