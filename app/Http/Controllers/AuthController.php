@@ -24,8 +24,6 @@ class AuthController extends Controller
         }
 
         $user = Auth::user();
-
-        // Hapus token lama biar tidak numpuk
         $user->tokens()->delete();
 
         $token = $user->createToken('auth_token')->plainTextToken;
@@ -38,6 +36,7 @@ class AuthController extends Controller
                     'id'    => $user->id,
                     'name'  => $user->name,
                     'email' => $user->email,
+                    'role'  => $user->role, // frontend pakai ini untuk routing
                 ],
                 'token'      => $token,
                 'token_type' => 'Bearer',

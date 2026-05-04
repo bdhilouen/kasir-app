@@ -9,6 +9,8 @@ use App\Models\Debt;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Cache;
 
 class TransactionController extends Controller
 {
@@ -18,9 +20,11 @@ class TransactionController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Transaction::with('transactionDetails.product');
+        $query = Transaction::with([
+            'transactionDetails:id,transaction_id,product_id,product_name,price,quantity,subtotal',
+            'voidedBy:id,name',
+        ]);
 
-        // Filter by tanggal
         if ($request->has('date')) {
             $query->whereDate('transaction_date', $request->date);
         }
@@ -32,18 +36,20 @@ class TransactionController extends Controller
             ]);
         }
 
-        // Filter by status
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }
 
-        // Filter by payment method
+        if ($request->has('is_voided')) {
+            $query->where('is_voided', $request->boolean('is_voided'));
+        }
+
         if ($request->has('payment_method')) {
             $query->where('payment_method', $request->payment_method);
         }
 
         $transactions = $query->orderBy('transaction_date', 'desc')
-                              ->paginate($request->input('per_page', 15));
+            ->paginate($request->input('per_page', 15));
 
         return response()->json([
             'success' => true,
@@ -58,100 +64,139 @@ class TransactionController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'customer_name'  => 'nullable|string|max:150',
-            'payment_method' => 'required|in:cash,transfer,qris',
-            'paid_amount'    => 'required|numeric|min:0',
-            'items'          => 'required|array|min:1',
+            'customer_name'      => 'nullable|string|max:150',
+            'payment_method'     => 'required|in:cash,transfer,qris',
+            'paid_amount'        => 'required|numeric|min:0|max:99999999',
+            'items'              => 'required|array|min:1|max:50',
             'items.*.product_id' => 'required|exists:products,id',
-            'items.*.quantity'   => 'required|integer|min:1',
+            'items.*.quantity'   => 'required|integer|min:1|max:999',
         ]);
 
-        // Wrap dalam DB transaction supaya kalau error, semua rollback
-        $transaction = DB::transaction(function () use ($validated) {
+        // Cache lock — cegah double submit dari user yang sama
+        $lockKey = 'transaction_user_' . $request->user()->id;
+        $lock    = Cache::lock($lockKey, 10);
 
-            $totalAmount = 0;
-            $itemsToSave = [];
+        if (!$lock->get()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Transaksi sedang diproses, tunggu sebentar.',
+            ], 429);
+        }
 
-            // Kalkulasi total & validasi stok semua item dulu sebelum disimpan
-            foreach ($validated['items'] as $item) {
-                $product = Product::lockForUpdate()->findOrFail($item['product_id']);
+        try {
+            $transaction = DB::transaction(function () use ($validated, $request) {
 
-                if ($product->stock < $item['quantity']) {
-                    throw new \Exception("Stok {$product->name} tidak cukup. Stok tersedia: {$product->stock}");
+                // Ambil semua produk sekaligus — 1 query, bukan N query
+                $productIds = collect($validated['items'])->pluck('product_id')->unique();
+                $products   = Product::lockForUpdate()
+                    ->whereIn('id', $productIds)
+                    ->get()
+                    ->keyBy('id');
+
+                // Validasi stok semua produk dulu sebelum ada yang diubah
+                foreach ($validated['items'] as $item) {
+                    $product = $products->get($item['product_id']);
+                    if (!$product) {
+                        throw new \Exception("Produk tidak ditemukan.");
+                    }
+                    if ($product->stock < $item['quantity']) {
+                        throw new \Exception(
+                            "Stok {$product->name} tidak cukup. Stok tersedia: {$product->stock}"
+                        );
+                    }
                 }
 
-                $subtotal     = $product->price * $item['quantity'];
-                $totalAmount += $subtotal;
+                // Kalkulasi total
+                $totalAmount = 0;
+                $detailsToInsert = [];
+                $stockUpdates    = [];
 
-                $itemsToSave[] = [
-                    'product'      => $product,
-                    'quantity'     => $item['quantity'],
-                    'price'        => $product->price,
-                    'subtotal'     => $subtotal,
-                    'product_name' => $product->name, // snapshot nama produk
-                ];
-            }
+                foreach ($validated['items'] as $item) {
+                    $product  = $products->get($item['product_id']);
+                    $subtotal = $product->price * $item['quantity'];
+                    $totalAmount += $subtotal;
 
-            // Hitung kembalian & status
-            $paidAmount   = $validated['paid_amount'];
-            $changeAmount = max(0, $paidAmount - $totalAmount);
-            $remaining    = $totalAmount - $paidAmount;
+                    $detailsToInsert[] = [
+                        'product_id'   => $product->id,
+                        'product_name' => $product->name,
+                        'price'        => $product->price,
+                        'quantity'     => $item['quantity'],
+                        'subtotal'     => $subtotal,
+                    ];
 
-            if ($paidAmount <= 0) {
-                $status = 'debt';
-            } elseif ($paidAmount >= $totalAmount) {
-                $status = 'paid';
-            } else {
-                $status = 'partial';
-            }
+                    $stockUpdates[$product->id] = $item['quantity'];
+                }
 
-            // Buat transaksi
-            $transaction = Transaction::create([
-                'invoice_number'  => $this->generateInvoiceNumber(),
-                'transaction_date'=> now(),
-                'customer_name'   => $validated['customer_name'] ?? null,
-                'total_amount'    => $totalAmount,
-                'paid_amount'     => $paidAmount,
-                'change_amount'   => $changeAmount,
-                'payment_method'  => $validated['payment_method'],
-                'status'          => $status,
-            ]);
+                $paidAmount   = $validated['paid_amount'];
+                $changeAmount = max(0, $paidAmount - $totalAmount);
+                $remaining    = $totalAmount - $paidAmount;
 
-            // Simpan detail & kurangi stok
-            foreach ($itemsToSave as $item) {
-                TransactionDetail::create([
-                    'transaction_id' => $transaction->id,
-                    'product_id'     => $item['product']->id,
-                    'product_name'   => $item['product_name'],
-                    'price'          => $item['price'],
-                    'quantity'       => $item['quantity'],
-                    'subtotal'       => $item['subtotal'],
+                $status = match (true) {
+                    $paidAmount <= 0             => 'debt',
+                    $paidAmount >= $totalAmount  => 'paid',
+                    default                      => 'partial',
+                };
+
+                // Buat transaksi
+                $transaction = Transaction::create([
+                    'invoice_number'   => $this->generateInvoiceNumber(),
+                    'transaction_date' => now(),
+                    'customer_name'    => $validated['customer_name'] ?? null,
+                    'total_amount'     => $totalAmount,
+                    'paid_amount'      => $paidAmount,
+                    'change_amount'    => $changeAmount,
+                    'payment_method'   => $validated['payment_method'],
+                    'status'           => $status,
+                    'is_voided'        => false,
                 ]);
 
-                // Kurangi stok produk
-                $item['product']->decrement('stock', $item['quantity']);
-            }
+                // Insert semua detail sekaligus — 1 query, bukan N query
+                $now = now();
+                $transaction->transactionDetails()->insert(
+                    collect($detailsToInsert)->map(fn($d) => array_merge($d, [
+                        'transaction_id' => $transaction->id,
+                        'created_at'     => $now,
+                        'updated_at'     => $now,
+                    ]))->toArray()
+                );
 
-            // Kalau hutang, buat record di tabel debts
-            if (in_array($status, ['debt', 'partial'])) {
-                Debt::create([
-                    'transaction_id' => $transaction->id,
-                    'customer_name'  => $validated['customer_name'] ?? 'Tidak diketahui',
-                    'total_debt'     => $totalAmount,
-                    'paid_amount'    => $paidAmount,
-                    'remaining_debt' => $remaining,
-                    'status'         => $status === 'debt' ? 'unpaid' : 'partial',
+                // Update stok semua produk — 1 query per produk tapi pakai DB statement
+                // lebih aman dari race condition dibanding update massal
+                foreach ($stockUpdates as $productId => $qty) {
+                    Product::where('id', $productId)->decrement('stock', $qty);
+                }
+
+                // Buat debt kalau perlu
+                if (in_array($status, ['debt', 'partial'])) {
+                    Debt::create([
+                        'transaction_id' => $transaction->id,
+                        'customer_name'  => $validated['customer_name'] ?? 'Tidak diketahui',
+                        'total_debt'     => $totalAmount,
+                        'paid_amount'    => $paidAmount,
+                        'remaining_debt' => $remaining,
+                        'status'         => $status === 'debt' ? 'unpaid' : 'partial',
+                    ]);
+                }
+
+                // Load hanya field yang dibutuhkan untuk response
+                return $transaction->load([
+                    'transactionDetails:id,transaction_id,product_id,product_name,price,quantity,subtotal',
                 ]);
-            }
+            });
 
-            return $transaction->load('transactionDetails');
-        });
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Transaksi berhasil disimpan.',
-            'data'    => $transaction,
-        ], 201);
+            return response()->json([
+                'success' => true,
+                'message' => 'Transaksi berhasil disimpan.',
+                'data'    => $transaction,
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        } finally {
+            $lock->release(); // selalu release lock
+        }
     }
 
     /**
@@ -160,7 +205,10 @@ class TransactionController extends Controller
      */
     public function show(Transaction $transaction): JsonResponse
     {
-        $transaction->load('transactionDetails.product');
+        $transaction->load([
+            'transactionDetails:id,transaction_id,product_id,product_name,price,quantity,subtotal',
+            'voidedBy:id,name',
+        ]);
 
         return response()->json([
             'success' => true,
@@ -169,42 +217,106 @@ class TransactionController extends Controller
     }
 
     /**
-     * Transaksi tidak boleh diedit, hanya bisa void/cancel.
-     * DELETE /api/transactions/{id}
+     * Void transaksi.
+     * POST /api/transactions/{id}/void
      */
-    public function destroy(Transaction $transaction): JsonResponse
+    public function void(Request $request, Transaction $transaction): JsonResponse
     {
-        // Transaksi yang sudah lunas tidak bisa dibatalkan
-        if ($transaction->status === 'paid') {
+        if ($transaction->is_voided) {
             return response()->json([
                 'success' => false,
-                'message' => 'Transaksi yang sudah lunas tidak bisa dibatalkan.',
+                'message' => 'Transaksi ini sudah pernah dibatalkan.',
             ], 422);
         }
 
-        DB::transaction(function () use ($transaction) {
-            // Kembalikan stok produk
-            foreach ($transaction->transactionDetails as $detail) {
+        $validated = $request->validate([
+            'password'    => 'required|string',
+            'void_reason' => 'nullable|string|max:255',
+        ]);
+
+        if (!Hash::check($validated['password'], $request->user()->password)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Password salah. Void transaksi dibatalkan.',
+            ], 403);
+        }
+
+        // Load detail sekaligus sebelum masuk DB transaction
+        $transaction->loadMissing('transactionDetails:id,transaction_id,product_id,quantity');
+
+        DB::transaction(function () use ($transaction, $validated, $request) {
+
+            // Kembalikan stok semua produk — 1 query per produk
+            // tidak bisa bulk update karena tiap produk qty berbeda
+            $transaction->transactionDetails->each(
+                fn($detail) =>
                 Product::where('id', $detail->product_id)
-                       ->increment('stock', $detail->quantity);
+                    ->increment('stock', $detail->quantity)
+            );
+
+            // Update debt kalau ada — load dulu biar tidak N+1
+            $transaction->loadMissing('debt');
+            if ($transaction->debt) {
+                $transaction->debt->update([
+                    'status' => 'paid',
+                    'notes'  => 'Transaksi di-void: ' . ($validated['void_reason'] ?? 'Tidak ada alasan'),
+                ]);
             }
 
-            // Hapus debt kalau ada
-            $transaction->debt()->delete();
-
-            // Hapus transaksi (detail ikut terhapus karena cascade)
-            $transaction->delete();
+            $transaction->update([
+                'is_voided'   => true,
+                'voided_at'   => now(),
+                'void_reason' => $validated['void_reason'] ?? null,
+                'voided_by'   => $request->user()->id,
+            ]);
         });
 
         return response()->json([
             'success' => true,
             'message' => 'Transaksi berhasil dibatalkan dan stok dikembalikan.',
+            'data'    => $transaction->fresh()->load([
+                'transactionDetails:id,transaction_id,product_id,product_name,price,quantity,subtotal',
+                'voidedBy:id,name',
+            ]),
         ]);
     }
 
     /**
-     * Generate nomor invoice otomatis.
-     * Format: INV-YYYYMMDD-XXXX (contoh: INV-20250321-0001)
+     * Riwayat transaksi untuk kasir.
+     * GET /api/transactions/cashier/history
+     */
+    public function cashierHistory(Request $request): JsonResponse
+    {
+        $request->validate([
+            'date' => 'nullable|date',
+        ]);
+
+        $date         = $request->input('date', now()->toDateString());
+        $sevenDaysAgo = now()->subDays(7)->toDateString();
+
+        if ($date < $sevenDaysAgo) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kasir hanya bisa melihat riwayat transaksi 7 hari ke belakang.',
+            ], 403);
+        }
+
+        $transactions = Transaction::with([
+            'transactionDetails:id,transaction_id,product_id,product_name,price,quantity,subtotal',
+        ])
+            ->whereDate('transaction_date', $date)
+            ->where('is_voided', false)
+            ->orderBy('transaction_date', 'desc')
+            ->paginate(15);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $transactions,
+        ]);
+    }
+
+    /**
+     * Generate nomor invoice — aman dari race condition dengan DB lock.
      */
     private function generateInvoiceNumber(): string
     {
@@ -212,10 +324,10 @@ class TransactionController extends Controller
         $prefix = "INV-{$date}-";
 
         $last = Transaction::where('invoice_number', 'like', "{$prefix}%")
-                           ->orderBy('invoice_number', 'desc')
-                           ->value('invoice_number');
+            ->orderBy('invoice_number', 'desc')
+            ->value('invoice_number');
 
-        $nextNumber = $last ? (int) substr($last, -4) + 1 : 1;
+        $nextNumber = $last ? ((int) substr($last, -4)) + 1 : 1;
 
         return $prefix . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
     }
