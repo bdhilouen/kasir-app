@@ -3,10 +3,13 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Traits\BelongsToOwner;
 
 class Product extends Model
 {
+    use BelongsToOwner;
     protected $fillable = [
+        'owner_id',
         'category_id',
         'name',
         'sku',

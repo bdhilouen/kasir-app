@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Category;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class CategoryController extends Controller
 {
@@ -45,8 +45,16 @@ class CategoryController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $ownerId = Category::resolveOwnerId();
+
         $validated = $request->validate([
-            'name'        => 'required|string|max:100|unique:categories,name',
+            'name'        => [
+                'required',
+                'string',
+                'max:100',
+                Rule::unique('categories', 'name')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId)),
+            ],
             'description' => 'nullable|string',
         ]);
 
@@ -81,8 +89,17 @@ class CategoryController extends Controller
      */
     public function update(Request $request, Category $category): JsonResponse
     {
+        $ownerId = Category::resolveOwnerId();
+
         $validated = $request->validate([
-            'name'        => "required|string|max:100|unique:categories,name,{$category->id}",
+            'name'        => [
+                'required',
+                'string',
+                'max:100',
+                Rule::unique('categories', 'name')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId))
+                    ->ignore($category->id),
+            ],
             'description' => 'nullable|string',
         ]);
 
@@ -126,8 +143,15 @@ class CategoryController extends Controller
      */
     public function merge(Request $request, Category $category): JsonResponse
     {
+        $ownerId = Category::resolveOwnerId();
+
         $validated = $request->validate([
-            'target_category_id' => "required|exists:categories,id|different:id",
+            'target_category_id' => [
+                'required',
+                Rule::exists('categories', 'id')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId)),
+                Rule::notIn([$category->id]),
+            ],
         ]);
 
         $targetCategory = Category::findOrFail($validated['target_category_id']);

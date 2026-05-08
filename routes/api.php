@@ -7,10 +7,14 @@ use App\Http\Controllers\DebtController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\TransactionController;
+use App\Http\Controllers\RegisterController;
 use Illuminate\Support\Facades\Route;
 
 // Public
-Route::post('auth/login', [AuthController::class, 'login']);
+Route::post('auth/login',           [AuthController::class, 'login'])->middleware('throttle:login');;
+Route::post('register/send-otp',    [RegisterController::class, 'sendOtp'])->middleware('throttle:otp');
+Route::post('register/verify-otp',  [RegisterController::class, 'verifyOtp']);
+Route::post('register',             [RegisterController::class, 'register']);
 
 Route::middleware('auth:sanctum')->group(function () {
 

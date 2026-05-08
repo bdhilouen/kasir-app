@@ -2,23 +2,27 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Seeder;
-use App\Models\Product;
 use App\Models\Category;
+use App\Models\Product;
+use App\Models\User;
+use Illuminate\Database\Seeder;
 
 class ProductSeeder extends Seeder
 {
     public function run(): void
     {
+        $owner = User::where('email', 'admin@warung.com')->first()
+            ?? User::where('role', 'admin')->first();
 
-        // Matikan pengecekan foreign key sementara (jika ada relasi seperti category_id)
-        \Illuminate\Support\Facades\Schema::disableForeignKeyConstraints();
+        if (! $owner) {
+            $this->command->error('Admin owner tidak ditemukan. Jalankan UserSeeder dulu.');
 
-        // Kosongkan isi tabel produk
-        Product::truncate();
+            return;
+        }
 
-        // Nyalakan kembali pengecekan foreign key
-        \Illuminate\Support\Facades\Schema::enableForeignKeyConstraints();
+        $categories = Category::where('owner_id', $owner->id)
+            ->get()
+            ->keyBy('name');
 
         $products = [
             [
@@ -28,7 +32,7 @@ class ProductSeeder extends Seeder
                 'stock' => 50,
                 'min_stock' => 5,
                 'description' => 'Mie instan goreng',
-                'category' => 'Makanan'
+                'category' => 'Makanan',
             ],
             [
                 'name' => 'Indomie Kuah Ayam Bawang',
@@ -37,7 +41,7 @@ class ProductSeeder extends Seeder
                 'stock' => 40,
                 'min_stock' => 5,
                 'description' => 'Mie kuah rasa ayam bawang',
-                'category' => 'Makanan'
+                'category' => 'Makanan',
             ],
             [
                 'name' => 'Aqua Botol 600ml',
@@ -46,7 +50,7 @@ class ProductSeeder extends Seeder
                 'stock' => 30,
                 'min_stock' => 10,
                 'description' => 'Air mineral',
-                'category' => 'Minuman'
+                'category' => 'Minuman',
             ],
             [
                 'name' => 'Teh Botol Sosro',
@@ -55,7 +59,7 @@ class ProductSeeder extends Seeder
                 'stock' => 25,
                 'min_stock' => 5,
                 'description' => 'Minuman teh botol',
-                'category' => 'Minuman'
+                'category' => 'Minuman',
             ],
             [
                 'name' => 'Kopi Kapal Api Sachet',
@@ -64,7 +68,7 @@ class ProductSeeder extends Seeder
                 'stock' => 100,
                 'min_stock' => 20,
                 'description' => 'Kopi sachet',
-                'category' => 'Minuman'
+                'category' => 'Minuman',
             ],
             [
                 'name' => 'Roti Tawar',
@@ -73,7 +77,7 @@ class ProductSeeder extends Seeder
                 'stock' => 10,
                 'min_stock' => 3,
                 'description' => 'Roti tawar segar',
-                'category' => 'Snack'
+                'category' => 'Snack',
             ],
             [
                 'name' => 'Telur Ayam 1 Kg',
@@ -82,7 +86,7 @@ class ProductSeeder extends Seeder
                 'stock' => 15,
                 'min_stock' => 5,
                 'description' => 'Telur ayam ras',
-                'category' => 'Sembako'
+                'category' => 'Sembako',
             ],
             [
                 'name' => 'Minyak Goreng 1L',
@@ -91,7 +95,7 @@ class ProductSeeder extends Seeder
                 'stock' => 20,
                 'min_stock' => 5,
                 'description' => 'Minyak goreng kemasan',
-                'category' => 'Sembako'
+                'category' => 'Sembako',
             ],
             [
                 'name' => 'Gula Pasir 1 Kg',
@@ -100,7 +104,7 @@ class ProductSeeder extends Seeder
                 'stock' => 18,
                 'min_stock' => 5,
                 'description' => 'Gula pasir putih',
-                'category' => 'Sembako'
+                'category' => 'Sembako',
             ],
             [
                 'name' => 'Garam Dapur',
@@ -109,21 +113,28 @@ class ProductSeeder extends Seeder
                 'stock' => 35,
                 'min_stock' => 10,
                 'description' => 'Garam halus',
-                'category' => 'Sembako'
+                'category' => 'Sembako',
             ],
         ];
 
         foreach ($products as $product) {
-            // Mencari ID kategori berdasarkan nama secara dinamis di dalam loop
-            $category = Category::where('name', $product['category'])->first();
+            $category = $categories->get($product['category']);
 
-            Product::create([
-                'category_id' => $category?->id, // Menggunakan null-safe operator
-                'name'        => $product['name'],
-                'sku'         => $product['sku'],
-                'price'       => $product['price'],
-                'stock'       => $product['stock'],
-                'min_stock'   => $product['min_stock'],
+            if (! $category) {
+                $this->command->warn("Kategori '{$product['category']}' tidak ditemukan untuk produk '{$product['name']}'.");
+
+                continue;
+            }
+
+            Product::updateOrCreate([
+                'owner_id' => $owner->id,
+                'sku' => $product['sku'],
+            ], [
+                'category_id' => $category->id,
+                'name' => $product['name'],
+                'price' => $product['price'],
+                'stock' => $product['stock'],
+                'min_stock' => $product['min_stock'],
                 'description' => $product['description'],
             ]);
         }
