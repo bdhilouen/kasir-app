@@ -3,10 +3,13 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Traits\BelongsToOwner;
 
 class Debt extends Model
 {
+    use BelongsToOwner;
     protected $fillable = [
+        'owner_id',
         'transaction_id',
         'customer_name',
         'total_debt',

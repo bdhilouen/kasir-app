@@ -32,6 +32,7 @@ class SyncDebts extends Command
             $remaining = $transaction->total_amount - $transaction->paid_amount;
 
             Debt::create([
+                'owner_id'        => $transaction->owner_id,
                 'transaction_id' => $transaction->id,
                 'customer_name'  => $transaction->customer_name ?? 'Tidak diketahui',
                 'total_debt'     => $transaction->total_amount,

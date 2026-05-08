@@ -11,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rule;
 
 class TransactionController extends Controller
 {
@@ -63,17 +64,23 @@ class TransactionController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $ownerId = Transaction::resolveOwnerId();
+
         $validated = $request->validate([
             'customer_name'      => 'nullable|string|max:150',
             'payment_method'     => 'required|in:cash,transfer,qris',
             'paid_amount'        => 'required|numeric|min:0|max:99999999',
             'items'              => 'required|array|min:1|max:50',
-            'items.*.product_id' => 'required|exists:products,id',
+            'items.*.product_id' => [
+                'required',
+                Rule::exists('products', 'id')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId)),
+            ],
             'items.*.quantity'   => 'required|integer|min:1|max:999',
         ]);
 
         // Cache lock — cegah double submit dari user yang sama
-        $lockKey = 'transaction_user_' . $request->user()->id;
+        $lockKey = 'transaction_owner_' . $ownerId;
         $lock    = Cache::lock($lockKey, 10);
 
         if (!$lock->get()) {

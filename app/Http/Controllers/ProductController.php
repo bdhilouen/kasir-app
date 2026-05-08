@@ -7,6 +7,7 @@ use App\Models\Category;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Rule;
 
 class ProductController extends Controller
 {
@@ -72,11 +73,23 @@ class ProductController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $ownerId = Product::resolveOwnerId();
+
         $validated = $request->validate([
             // Tambahkan validasi category_id disini
-            'category_id' => 'nullable|exists:categories,id',
+            'category_id' => [
+                'nullable',
+                Rule::exists('categories', 'id')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId)),
+            ],
             'name'        => 'required|string|max:150',
-            'sku'         => 'required|string|max:100|unique:products,sku',
+            'sku'         => [
+                'required',
+                'string',
+                'max:100',
+                Rule::unique('products', 'sku')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId)),
+            ],
             'price'       => 'required|numeric|min:0',
             'stock'       => 'sometimes|integer|min:0',
             'min_stock'   => 'sometimes|integer|min:0',
@@ -113,11 +126,26 @@ class ProductController extends Controller
      */
     public function update(Request $request, Product $product): JsonResponse
     {
+        $ownerId = Product::resolveOwnerId();
+
         $validated = $request->validate([
             // Tambahkan validasi category_id disini juga
-            'category_id' => 'sometimes|nullable|exists:categories,id',
+            'category_id' => [
+                'sometimes',
+                'nullable',
+                Rule::exists('categories', 'id')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId)),
+            ],
             'name'        => 'sometimes|required|string|max:150',
-            'sku'         => "sometimes|required|string|max:100|unique:products,sku,{$product->id}",
+            'sku'         => [
+                'sometimes',
+                'required',
+                'string',
+                'max:100',
+                Rule::unique('products', 'sku')
+                    ->where(fn($query) => $query->where('owner_id', $ownerId))
+                    ->ignore($product->id),
+            ],
             'price'       => 'sometimes|required|numeric|min:0',
             'stock'       => 'sometimes|integer|min:0',
             'min_stock'   => 'sometimes|integer|min:0',

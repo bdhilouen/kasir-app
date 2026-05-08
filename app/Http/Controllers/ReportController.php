@@ -8,6 +8,7 @@ use App\Models\Debt;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class ReportController extends Controller
 {
@@ -18,7 +19,7 @@ class ReportController extends Controller
     public function daily(Request $request): JsonResponse
     {
         $date       = $request->input('date', now()->toDateString());
-        $categoryId = $request->input('category_id');
+        $categoryId = $this->validatedCategoryId($request);
 
         // Ambil summary langsung dari DB — tidak load transaksi ke memory
         $summary = $this->buildSummaryFromDB(
@@ -59,7 +60,7 @@ class ReportController extends Controller
     public function weekly(Request $request): JsonResponse
     {
         $date       = $request->input('date', now()->toDateString());
-        $categoryId = $request->input('category_id');
+        $categoryId = $this->validatedCategoryId($request);
         $startDate  = now()->parse($date)->startOfWeek()->toDateString();
         $endDate    = now()->parse($date)->endOfWeek()->toDateString();
 
@@ -82,7 +83,7 @@ class ReportController extends Controller
     public function monthly(Request $request): JsonResponse
     {
         $month      = $request->input('month', now()->format('Y-m'));
-        $categoryId = $request->input('category_id');
+        $categoryId = $this->validatedCategoryId($request);
         $startDate  = now()->parse($month . '-01')->startOfMonth()->toDateString();
         $endDate    = now()->parse($month . '-01')->endOfMonth()->toDateString();
 
@@ -111,7 +112,7 @@ class ReportController extends Controller
             'end_date'   => 'required|date|after_or_equal:start_date',
         ]);
 
-        $categoryId = $request->input('category_id');
+        $categoryId = $this->validatedCategoryId($request);
 
         return response()->json([
             'success' => true,
@@ -134,12 +135,12 @@ class ReportController extends Controller
         $request->validate([
             'start_date'  => 'required|date',
             'end_date'    => 'required|date|after_or_equal:start_date',
-            'category_id' => 'nullable|exists:categories,id',
+            'category_id' => ['nullable', $this->ownedCategoryExistsRule()],
         ]);
 
         $startDate  = $request->start_date;
         $endDate    = $request->end_date;
-        $categoryId = $request->input('category_id');
+        $categoryId = $request->filled('category_id') ? (int) $request->input('category_id') : null;
 
         // Semua kalkulasi dilakukan di DB — tidak ada loop di PHP
         $chartData = $this->buildDailyBreakdownFromDB($startDate, $endDate, $categoryId);
@@ -166,6 +167,8 @@ class ReportController extends Controller
             'end_date'   => 'required|date|after_or_equal:start_date',
         ]);
 
+        $ownerId = Transaction::resolveOwnerId();
+
         // Semua grouping dilakukan di DB — tidak ada loop PHP
         $breakdown = TransactionDetail::select(
                 'products.category_id',
@@ -175,7 +178,11 @@ class ReportController extends Controller
                 DB::raw('COUNT(transaction_details.id) as total_items'),
             )
             ->join('products', 'products.id', '=', 'transaction_details.product_id')
-            ->leftJoin('categories', 'categories.id', '=', 'products.category_id')
+            ->leftJoin('categories', function ($join) use ($ownerId) {
+                $join->on('categories.id', '=', 'products.category_id')
+                    ->where('categories.owner_id', $ownerId);
+            })
+            ->where('products.owner_id', $ownerId)
             ->whereHas('transaction', fn($q) =>
                 $q->whereBetween('transaction_date', [
                         $request->start_date . ' 00:00:00',
@@ -254,14 +261,14 @@ class ReportController extends Controller
         $request->validate([
             'start_date'  => 'nullable|date',
             'end_date'    => 'nullable|date|after_or_equal:start_date',
-            'category_id' => 'nullable|exists:categories,id',
+            'category_id' => ['nullable', $this->ownedCategoryExistsRule()],
             'limit'       => 'nullable|integer|min:1|max:50',
         ]);
 
         $topProducts = $this->buildTopProductsFromDB(
             startDate:  $request->start_date,
             endDate:    $request->end_date,
-            categoryId: $request->input('category_id'),
+            categoryId: $request->filled('category_id') ? (int) $request->input('category_id') : null,
             limit:      $request->input('limit', 10),
         );
 
@@ -274,6 +281,23 @@ class ReportController extends Controller
     // ============================================================
     // Private Helper Methods — semua kalkulasi dilakukan di DB
     // ============================================================
+
+    private function validatedCategoryId(Request $request): ?int
+    {
+        $request->validate([
+            'category_id' => ['nullable', $this->ownedCategoryExistsRule()],
+        ]);
+
+        return $request->filled('category_id') ? (int) $request->input('category_id') : null;
+    }
+
+    private function ownedCategoryExistsRule()
+    {
+        $ownerId = Transaction::resolveOwnerId();
+
+        return Rule::exists('categories', 'id')
+            ->where(fn($query) => $query->where('owner_id', $ownerId));
+    }
 
     /**
      * Build summary langsung dari DB tanpa load transaksi ke memory.
@@ -353,33 +377,53 @@ class ReportController extends Controller
         string $endDate,
         ?int   $categoryId = null,
     ): array {
+        $ownerId = Transaction::resolveOwnerId();
+
         // Kalau ada filter kategori, revenue dari detail; kalau tidak, dari transaksi
         if ($categoryId) {
             $rows = DB::select("
                 SELECT
                     d::date AS date,
-                    COALESCE(SUM(td.subtotal), 0)        AS revenue,
-                    COALESCE(COUNT(DISTINCT t.id), 0)    AS total_transactions,
-                    COALESCE(SUM(t.paid_amount), 0)      AS total_collected
+                    COALESCE(x.revenue, 0)              AS revenue,
+                    COALESCE(x.total_transactions, 0)   AS total_transactions,
+                    COALESCE(x.total_collected, 0)      AS total_collected
                 FROM generate_series(
                     :start::date,
                     :end::date,
                     '1 day'::interval
                 ) AS d
-                LEFT JOIN transactions t
-                    ON t.transaction_date::date = d::date
-                    AND t.is_voided = false
-                    AND t.status != 'debt'
-                LEFT JOIN transaction_details td
-                    ON td.transaction_id = t.id
-                LEFT JOIN products p
-                    ON p.id = td.product_id
-                    AND p.category_id = :category_id
-                GROUP BY d
+                LEFT JOIN (
+                    SELECT
+                        t.transaction_date::date AS date,
+                        SUM(category_details.revenue) AS revenue,
+                        COUNT(t.id) AS total_transactions,
+                        SUM(t.paid_amount) AS total_collected
+                    FROM transactions t
+                    JOIN (
+                        SELECT
+                            td.transaction_id,
+                            SUM(td.subtotal) AS revenue
+                        FROM transaction_details td
+                        JOIN products p
+                            ON p.id = td.product_id
+                            AND p.owner_id = :product_owner_id
+                            AND p.category_id = :category_id
+                        GROUP BY td.transaction_id
+                    ) category_details ON category_details.transaction_id = t.id
+                    WHERE t.owner_id = :transaction_owner_id
+                        AND t.transaction_date BETWEEN :start_ts AND :end_ts
+                        AND t.is_voided = false
+                        AND t.status != 'debt'
+                    GROUP BY t.transaction_date::date
+                ) x ON x.date = d::date
                 ORDER BY d
             ", [
                 'start'       => $startDate,
                 'end'         => $endDate,
+                'start_ts'    => $startDate . ' 00:00:00',
+                'end_ts'      => $endDate . ' 23:59:59',
+                'product_owner_id' => $ownerId,
+                'transaction_owner_id' => $ownerId,
                 'category_id' => $categoryId,
             ]);
         } else {
@@ -397,11 +441,13 @@ class ReportController extends Controller
                 LEFT JOIN transactions t
                     ON t.transaction_date::date = d::date
                     AND t.is_voided = false
+                    AND t.owner_id = :owner_id
                 GROUP BY d
                 ORDER BY d
             ", [
-                'start' => $startDate,
-                'end'   => $endDate,
+                'start'    => $startDate,
+                'end'      => $endDate,
+                'owner_id' => $ownerId,
             ]);
         }
 
@@ -422,6 +468,8 @@ class ReportController extends Controller
         ?int    $categoryId = null,
         int     $limit      = 10,
     ): array {
+        $ownerId = Transaction::resolveOwnerId();
+
         $query = TransactionDetail::select(
                 'transaction_details.product_id',
                 'transaction_details.product_name',
@@ -429,6 +477,7 @@ class ReportController extends Controller
                 DB::raw('SUM(transaction_details.subtotal) as total_revenue'),
             )
             ->join('transactions', 'transactions.id', '=', 'transaction_details.transaction_id')
+            ->where('transactions.owner_id', $ownerId)
             ->where('transactions.is_voided', false)
             ->groupBy('transaction_details.product_id', 'transaction_details.product_name')
             ->orderByDesc('total_quantity')
@@ -443,6 +492,7 @@ class ReportController extends Controller
 
         if ($categoryId) {
             $query->join('products', 'products.id', '=', 'transaction_details.product_id')
+                  ->where('products.owner_id', $ownerId)
                   ->where('products.category_id', $categoryId);
         }
 
