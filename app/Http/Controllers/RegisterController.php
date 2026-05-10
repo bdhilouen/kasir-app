@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Resend\Laravel\Facades\Resend;
 
 class RegisterController extends Controller
 {
@@ -22,10 +23,8 @@ class RegisterController extends Controller
             'email' => 'required|email|unique:users,email',
         ]);
 
-        // Hapus OTP lama yang belum dipakai untuk email ini
         OtpCode::where('email', $request->email)->delete();
 
-        // Generate OTP 6 digit
         $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         OtpCode::create([
@@ -35,8 +34,28 @@ class RegisterController extends Controller
             'is_used'    => false,
         ]);
 
-        // Kirim email
-        Mail::to($request->email)->send(new OtpMail($otp, $request->email));
+        // Kirim langsung via Resend HTTP tanpa Laravel Mail
+        try {
+            $resend = \Resend::client(config('resend.api_key'));
+
+            $resend->emails->send([
+                'from'    => config('mail.from.address') . ' <' . config('mail.from.address') . '>',
+                'to'      => [$request->email],
+                'subject' => 'Kode OTP Registrasi - MaKasir',
+                'html'    => view('emails.otp', [
+                    'otp'   => $otp,
+                    'email' => $request->email,
+                ])->render(),
+            ]);
+        } catch (\Exception $e) {
+            // Hapus OTP yang sudah dibuat kalau gagal kirim
+            OtpCode::where('email', $request->email)->delete();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengirim OTP: ' . $e->getMessage(),
+            ], 500);
+        }
 
         return response()->json([
             'success' => true,
