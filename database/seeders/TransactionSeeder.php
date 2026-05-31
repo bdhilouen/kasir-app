@@ -9,6 +9,7 @@ use App\Models\TransactionDetail;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
+use illuminate\Support\Facades\App;
 
 class TransactionSeeder extends Seeder
 {
@@ -32,7 +33,7 @@ class TransactionSeeder extends Seeder
         }
 
         mt_srand(20260507);
-        \fake()->seed(20260507);
+        fake()->seed(20260507);
 
         $startDate = Carbon::create(2026, 4, 1);
         $endDate = Carbon::create(2026, 5, 31);
@@ -87,11 +88,11 @@ class TransactionSeeder extends Seeder
                 'invoice_number' => $invoiceNumber,
             ], [
                 'transaction_date' => $date,
-                'customer_name' => \fake()->randomElement(['Budi', 'Siti', 'Andi', 'Dewi', 'Walk-in']),
+                'customer_name' => fake()->randomElement(['Budi', 'Siti', 'Andi', 'Dewi', 'Walk-in']),
                 'total_amount' => $totalAmount,
                 'paid_amount' => $paidAmount,
                 'change_amount' => $change,
-                'payment_method' => \fake()->randomElement(['cash', 'transfer', 'qris']),
+                'payment_method' => fake()->randomElement(['cash', 'transfer', 'qris']),
                 'status' => $status,
                 'is_voided' => false,
             ]);
