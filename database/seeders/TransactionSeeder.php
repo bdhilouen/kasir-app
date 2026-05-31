@@ -8,13 +8,18 @@ use App\Models\Transaction;
 use App\Models\TransactionDetail;
 use App\Models\User;
 use Carbon\Carbon;
+use Faker\Factory;
 use Illuminate\Database\Seeder;
-use illuminate\Support\Facades\App;
 
 class TransactionSeeder extends Seeder
 {
     public function run(): void
     {
+        $faker = Factory::create('id_ID');
+        $faker->seed(20260507);
+
+        mt_srand(20260507);
+
         $owner = User::where('email', 'admin@warung.com')->first()
             ?? User::where('role', 'admin')->first();
 
@@ -32,9 +37,6 @@ class TransactionSeeder extends Seeder
             return;
         }
 
-        mt_srand(20260507);
-        fake()->seed(20260507);
-
         $startDate = Carbon::create(2026, 4, 1);
         $endDate = Carbon::create(2026, 5, 31);
 
@@ -44,15 +46,27 @@ class TransactionSeeder extends Seeder
                 rand($startDate->timestamp, $endDate->timestamp)
             );
 
-            $date->setTime(rand(7, 22), rand(0, 59));
+            $date->setTime(
+                rand(7, 22),
+                rand(0, 59),
+                rand(0, 59)
+            );
 
-            $itemsCount = rand(1, 5);
+            $itemsCount = rand(
+                1,
+                min(5, $products->count())
+            );
+
+            $selectedProducts = $products->random($itemsCount);
+
+            if (! $selectedProducts instanceof \Illuminate\Support\Collection) {
+                $selectedProducts = collect([$selectedProducts]);
+            }
 
             $totalAmount = 0;
             $details = [];
 
-            for ($j = 0; $j < $itemsCount; $j++) {
-                $product = $products->random();
+            foreach ($selectedProducts as $product) {
                 $qty = rand(1, 3);
 
                 $subtotal = $product->price * $qty;
@@ -67,13 +81,12 @@ class TransactionSeeder extends Seeder
                 ];
             }
 
-            // Payment logic
             $paidAmount = rand(0, $totalAmount + 10000);
 
             if ($paidAmount >= $totalAmount) {
                 $status = 'paid';
                 $change = $paidAmount - $totalAmount;
-            } elseif ($paidAmount == 0) {
+            } elseif ($paidAmount === 0) {
                 $status = 'debt';
                 $change = 0;
             } else {
@@ -81,21 +94,37 @@ class TransactionSeeder extends Seeder
                 $change = 0;
             }
 
-            $invoiceNumber = 'INV-'.$date->format('Ymd').'-'.str_pad($i, 4, '0', STR_PAD_LEFT);
+            $invoiceNumber = 'INV-' .
+                $date->format('Ymd') .
+                '-' .
+                str_pad($i, 4, '0', STR_PAD_LEFT);
 
-            $transaction = Transaction::updateOrCreate([
-                'owner_id' => $owner->id,
-                'invoice_number' => $invoiceNumber,
-            ], [
-                'transaction_date' => $date,
-                'customer_name' => fake()->randomElement(['Budi', 'Siti', 'Andi', 'Dewi', 'Walk-in']),
-                'total_amount' => $totalAmount,
-                'paid_amount' => $paidAmount,
-                'change_amount' => $change,
-                'payment_method' => fake()->randomElement(['cash', 'transfer', 'qris']),
-                'status' => $status,
-                'is_voided' => false,
-            ]);
+            $transaction = Transaction::updateOrCreate(
+                [
+                    'owner_id' => $owner->id,
+                    'invoice_number' => $invoiceNumber,
+                ],
+                [
+                    'transaction_date' => $date,
+                    'customer_name' => $faker->randomElement([
+                        'Budi',
+                        'Siti',
+                        'Andi',
+                        'Dewi',
+                        'Walk-in',
+                    ]),
+                    'total_amount' => $totalAmount,
+                    'paid_amount' => $paidAmount,
+                    'change_amount' => $change,
+                    'payment_method' => $faker->randomElement([
+                        'cash',
+                        'transfer',
+                        'qris',
+                    ]),
+                    'status' => $status,
+                    'is_voided' => false,
+                ]
+            );
 
             $transaction->transactionDetails()->delete();
             $transaction->debt()->delete();
@@ -115,7 +144,9 @@ class TransactionSeeder extends Seeder
                     'total_debt' => $totalAmount,
                     'paid_amount' => $paidAmount,
                     'remaining_debt' => $totalAmount - $paidAmount,
-                    'status' => $status === 'debt' ? 'unpaid' : 'partial',
+                    'status' => $status === 'debt'
+                        ? 'unpaid'
+                        : 'partial',
                 ]);
             }
         }
