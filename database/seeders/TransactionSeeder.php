@@ -8,14 +8,13 @@ use App\Models\Transaction;
 use App\Models\TransactionDetail;
 use App\Models\User;
 use Carbon\Carbon;
-use Faker\Factory;
 use Illuminate\Database\Seeder;
 
 class TransactionSeeder extends Seeder
 {
     public function run(): void
     {
-        $faker = Factory::create('id_ID');
+        $faker = \Faker\Factory::create('id_ID');
         $faker->seed(20260507);
 
         mt_srand(20260507);
