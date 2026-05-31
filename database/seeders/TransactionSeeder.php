@@ -14,9 +14,7 @@ class TransactionSeeder extends Seeder
 {
     public function run(): void
     {
-        $faker = \Faker\Factory::create('id_ID');
-        $faker->seed(20260507);
-
+        // Tetap pakai seed biar data randomnya konsisten (nggak berubah-ubah pas di-seed ulang)
         mt_srand(20260507);
 
         $owner = User::where('email', 'admin@warung.com')->first()
@@ -24,7 +22,6 @@ class TransactionSeeder extends Seeder
 
         if (! $owner) {
             $this->command->error('Admin owner tidak ditemukan. Jalankan UserSeeder dulu.');
-
             return;
         }
 
@@ -32,12 +29,15 @@ class TransactionSeeder extends Seeder
 
         if ($products->isEmpty()) {
             $this->command->error('Produk kosong! Jalankan ProductSeeder dulu.');
-
             return;
         }
 
         $startDate = Carbon::create(2026, 4, 1);
         $endDate = Carbon::create(2026, 5, 31);
+
+        // Siapin array buat data random manual
+        $customers = ['Budi', 'Siti', 'Andi', 'Dewi', 'Walk-in'];
+        $paymentMethods = ['cash', 'transfer', 'qris'];
 
         for ($i = 1; $i <= 300; $i++) {
 
@@ -98,6 +98,10 @@ class TransactionSeeder extends Seeder
                 '-' .
                 str_pad($i, 4, '0', STR_PAD_LEFT);
 
+            // Ambil nama customer dan metode pembayaran random pakai PHP Native
+            $randomCustomer = $customers[array_rand($customers)];
+            $randomPaymentMethod = $paymentMethods[array_rand($paymentMethods)];
+
             $transaction = Transaction::updateOrCreate(
                 [
                     'owner_id' => $owner->id,
@@ -105,21 +109,11 @@ class TransactionSeeder extends Seeder
                 ],
                 [
                     'transaction_date' => $date,
-                    'customer_name' => $faker->randomElement([
-                        'Budi',
-                        'Siti',
-                        'Andi',
-                        'Dewi',
-                        'Walk-in',
-                    ]),
+                    'customer_name' => $randomCustomer,
                     'total_amount' => $totalAmount,
                     'paid_amount' => $paidAmount,
                     'change_amount' => $change,
-                    'payment_method' => $faker->randomElement([
-                        'cash',
-                        'transfer',
-                        'qris',
-                    ]),
+                    'payment_method' => $randomPaymentMethod,
                     'status' => $status,
                     'is_voided' => false,
                 ]
