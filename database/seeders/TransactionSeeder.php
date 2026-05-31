@@ -34,10 +34,10 @@ class TransactionSeeder extends Seeder
         mt_srand(20260507);
         fake()->seed(20260507);
 
-        $startDate = Carbon::create(2026, 1, 1);
-        $endDate = Carbon::create(2026, 4, 30);
+        $startDate = Carbon::create(2026, 4, 1);
+        $endDate = Carbon::create(2026, 5, 31);
 
-        for ($i = 1; $i <= 200; $i++) {
+        for ($i = 1; $i <= 300; $i++) {
 
             $date = Carbon::createFromTimestamp(
                 rand($startDate->timestamp, $endDate->timestamp)
@@ -119,6 +119,6 @@ class TransactionSeeder extends Seeder
             }
         }
 
-        $this->command->info('200 transaksi dummy berhasil dibuat!');
+        $this->command->info('300 transaksi dummy berhasil dibuat!');
     }
 }
