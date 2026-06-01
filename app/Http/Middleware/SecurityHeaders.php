@@ -17,16 +17,21 @@ class SecurityHeaders
     {
         $response = $next($request);
 
-        // Fix 1: X-Content-Type-Options (Paling gampang, mencegah MIME sniffing)
-        $response->headers->set('X-Content-Type-Options', 'nosniff');
+        // Kalau responnya berupa file atau stream, skip aja biar ga error
+        if (method_exists($response, 'header')) {
 
-        // Fix 2: Anti-clickjacking (Mencegah web lu dibungkus iframe oleh hacker)
-        $response->headers->set('X-Frame-Options', 'SAMEORIGIN');
+            // Fix HSTS (Strict-Transport-Security)
+            $response->header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 
-        // Fix 3: Content Security Policy (CSP)
-        // Catatan: Settingan ini ngizinin script dari domain sendiri. 
-        // Kalau React lu butuh asset dari luar, aturannya perlu ditambahin.
-        $response->headers->set('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval';");
+            // Re-apply X-Content-Type buat endpoint API
+            $response->header('X-Content-Type-Options', 'nosniff');
+
+            // Hapus header X-Powered-By bawaan PHP (Fix Server Leaks Info)
+            if (function_exists('header_remove')) {
+                header_remove('X-Powered-By');
+            }
+            $response->headers->remove('X-Powered-By');
+        }
 
         return $response;
     }
