@@ -16,6 +16,16 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin'   => \App\Http\Middleware\EnsureUserIsAdmin::class,
             'cashier' => \App\Http\Middleware\EnsureUserIsCashier::class,
         ]);
+
+        // Kalau mau dipasang di semua route group WEB (halaman biasa)
+        $middleware->web(append: [
+            \App\Http\Middleware\SecurityHeaders::class,
+        ]);
+
+        // Kalau lu pake API dan mau dipasang di route API juga
+        $middleware->api(append: [
+            \App\Http\Middleware\SecurityHeaders::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
